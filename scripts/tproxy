@@ -128,6 +128,8 @@ _snapshot_active_runtime() {
         printf 'PREV_NF_CONNTRACK_TCP_CLOSE_WAIT=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "")"
         printf 'PREV_NET_RMEM_MAX=%s\n' "$(_read_file_value /proc/sys/net/core/rmem_max "")"
         printf 'PREV_NET_WMEM_MAX=%s\n' "$(_read_file_value /proc/sys/net/core/wmem_max "")"
+        printf 'PREV_RP_FILTER_ALL=%s\n' "$(_read_file_value /proc/sys/net/ipv4/conf/all/rp_filter "")"
+        printf 'PREV_ROUTE_LOCALNET_ALL=%s\n' "$(_read_file_value /proc/sys/net/ipv4/conf/all/route_localnet "")"
         [ -n "${v4_hash}" ] && printf 'CLEANUP_V4_SHA256=%s\n' "${v4_hash}"
         [ -n "${v6_hash}" ] && printf 'CLEANUP_V6_SHA256=%s\n' "${v6_hash}"
     } >"${tmp}" || return 1
@@ -181,6 +183,8 @@ _snapshot_active_features() {
         [ -n "${CONNTRACK_UDP_STREAM_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_UDP_STREAM_TIMEOUT=1"
         [ -n "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT=1"
         [ -n "${SOCKET_BUFFER_MAX}" ] && printf '%s\n' "SOCKET_BUFFER_MAX=1"
+        [ "${PROXY_MODE}" = "tproxy" ] && printf '%s\n' "RP_FILTER_LOOSE=1"
+        [ "${LOCALNET_FIX}" = "1" ] && printf '%s\n' "LOCALNET_FIX=1"
     } >"${ACTIVE_FEATURES_FILE}.tmp"
     if [ -s "${ACTIVE_FEATURES_FILE}.tmp" ]; then
         mv -f "${ACTIVE_FEATURES_FILE}.tmp" "${ACTIVE_FEATURES_FILE}"
@@ -339,6 +343,20 @@ _apply_compat_profiles() {
         _write_file_value /proc/sys/net/core/wmem_max "${SOCKET_BUFFER_MAX}" || log_warn "Cannot set net.core.wmem_max"
     fi
 
+    # TPROXY relies on the kernel accepting packets that ingress on one
+    # interface and would route out on another. Strict reverse-path filtering
+    # (rp_filter=1) drops those. Loose mode (=2) keeps anti-spoof protection
+    # while allowing the asymmetric path TPROXY needs.
+    # REF: kernel Documentation/networking/ip-sysctl.rst — "2 - Loose mode"
+    # REF: mihomo + box4magisk both require this for TPROXY hosts.
+    if [ "${PROXY_MODE}" = "tproxy" ]; then
+        _write_file_value /proc/sys/net/ipv4/conf/all/rp_filter 2 || log_warn "Cannot set rp_filter loose mode"
+    fi
+
+    if [ "${LOCALNET_FIX}" = "1" ]; then
+        _write_file_value /proc/sys/net/ipv4/conf/all/route_localnet 1 || log_warn "Cannot enable route_localnet"
+    fi
+
     return 0
 }
 
@@ -386,6 +404,16 @@ _restore_compat_profiles() {
         [ -n "${value}" ] && _write_file_value /proc/sys/net/core/rmem_max "${value}" || true
         value="$(_active_runtime_value PREV_NET_WMEM_MAX "")"
         [ -n "${value}" ] && _write_file_value /proc/sys/net/core/wmem_max "${value}" || true
+    fi
+
+    if _active_feature_enabled "RP_FILTER_LOOSE"; then
+        value="$(_active_runtime_value PREV_RP_FILTER_ALL "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/ipv4/conf/all/rp_filter "${value}" || true
+    fi
+
+    if _active_feature_enabled "LOCALNET_FIX"; then
+        value="$(_active_runtime_value PREV_ROUTE_LOCALNET_ALL "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/ipv4/conf/all/route_localnet "${value}" || true
     fi
     return 0
 }
