@@ -33,6 +33,11 @@ readonly SCRIPT_DIR="${_script_path%/*}"
 
 readonly LOG_COMPONENT="Disp"
 
+# Best-effort postmortem on stage failure. ERR trap is independent of
+# the EXIT trap used inside _with_dispatch_lock(). See scripts/lib:dump_tombstone.
+# REF: docs/p4-kernel-features-and-forensics.md section P4b.
+trap 'dump_tombstone dispatcher "$BASH_COMMAND failed (rc=$?)"' ERR
+
 load_config || exit 1
 
 # ==============================================================================

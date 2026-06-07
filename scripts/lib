@@ -172,6 +172,88 @@ cleanup() {
 }
 
 # ==============================================================================
+# [ Failure Forensics ]
+# ==============================================================================
+
+# Read the module version string (from module.prop) without failing.
+_flux_version() {
+    [ -r "${PROP_FILE}" ] || { printf 'unknown'; return 0; }
+    local line
+    while IFS= read -r line; do
+        case "${line}" in
+        version=*) printf '%s' "${line#version=}"; return 0 ;;
+        esac
+    done <"${PROP_FILE}"
+    printf 'unknown'
+}
+
+# Dump a postmortem snapshot when a stage fails.
+# Usage: dump_tombstone STAGE [REASON]
+#
+# Best-effort: every subcommand swallows errors and the function itself
+# returns 0 even when the filesystem is unwriteable, so a failing tombstone
+# never masks the original failure. Writes go to ${RUN_DIR}/tombstone/
+# and the directory is capped at 10 most-recent entries.
+#
+# REF: postmortem pattern from NetProxy-Magisk (docs/netproxy-magisk-analysis-report.md)
+#      and AndroidTProxyShell (https://github.com/CHIZI-0618/AndroidTProxyShell).
+#      Android disables coredumps for non-debug builds, so a text dump is
+#      what operators actually want.
+# REF: docs/p4-kernel-features-and-forensics.md section P4b.
+dump_tombstone() {
+    local stage="${1:-unknown}"
+    local reason="${2:-unknown}"
+    local out_dir="${RUN_DIR:-/data/adb/flux/run}/tombstone"
+    mkdir -p "${out_dir}" 2>/dev/null || return 0
+
+    local ts
+    ts=$(date +%Y%m%d-%H%M%S 2>/dev/null) || ts="unknown"
+    local f="${out_dir}/${ts}-${stage}.txt"
+
+    {
+        printf '== flux tombstone ==\n'
+        printf 'stage: %s\nreason: %s\nts: %s\n' "${stage}" "${reason}" "${ts}"
+        printf 'flux_version: %s\n' "$(_flux_version 2>/dev/null)"
+        printf 'kernel: %s\n' "$(uname -r 2>/dev/null)"
+
+        printf '\n== kfeat vars ==\n'
+        set 2>/dev/null | grep -E '^KFEAT_' 2>/dev/null
+
+        printf '\n== last 50 log lines ==\n'
+        tail -n 50 "${FLUX_LOG:-/data/adb/flux/run/flux.log}" 2>/dev/null
+
+        printf '\n== iptables -t mangle -L -n -v ==\n'
+        iptables -w "${IPTABLES_WAIT:-100}" -t mangle -L -n -v 2>/dev/null
+
+        printf '\n== ip6tables -t mangle -L -n -v ==\n'
+        ip6tables -w "${IPTABLES_WAIT:-100}" -t mangle -L -n -v 2>/dev/null
+
+        printf '\n== ip -4 rule ==\n'; ip -4 rule 2>/dev/null
+        printf '\n== ip -6 rule ==\n'; ip -6 rule 2>/dev/null
+
+        printf '\n== ip -4 route show table all (first 100) ==\n'
+        ip -4 route show table all 2>/dev/null | head -n 100
+
+        printf '\n== conntrack ==\n'
+        cat /proc/net/netfilter/nf_conntrack_count 2>/dev/null
+        cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null
+
+        printf '\n== runtime snapshot dir ==\n'
+        ls -l "${RUN_DIR:-/data/adb/flux/run}" 2>/dev/null
+    } >"${f}" 2>&1
+
+    # Cap at 10 most-recent tombstones.
+    # shellcheck disable=SC2012
+    ls -1t "${out_dir}"/*.txt 2>/dev/null | tail -n +11 | xargs -r rm -f 2>/dev/null
+
+    if command -v log_warn >/dev/null 2>&1; then
+        log_warn "tombstone written: ${f}"
+    fi
+
+    return 0
+}
+
+# ==============================================================================
 # [ Network Utilities ]
 # ==============================================================================
 
