@@ -267,10 +267,31 @@ Main configuration file: `/data/adb/flux/conf/settings.ini`. Changes take effect
 | Option | Description | Default |
 |--------|-------------|---------|
 | `MSS_CLAMP_ENABLE`| Enable TCP MSS Clamping | `1` |
-| `BYPASS_IP_BACKEND`| `auto`=Prefer hybrid ipset, `ipset`=Force ipset, `tree`=Force pure iptables tree | `auto` |
-| `IPSET`| Legacy alias: `0`=`auto`, `1`=`ipset` when `BYPASS_IP_BACKEND` is unset | `0` |
+| `BLOCK_QUIC` | Block UDP/443 QUIC globally | `0` |
+| `MARK_MASK` | Connmark mask used by Flux marks | `0xff` |
+| `RULE_BACKEND` | Rule backend (`iptables_restore` only for production) | `iptables_restore` |
+| `BYPASS_SET_BACKEND` | Bypass set backend (`zone`, `ipset`, `auto`) | `zone` |
+| `PERFORMANCE_MODE` | Enable optional socket/conntrack fast path when supported | `0` |
+| `PRIVATE_DNS_GUARD` | Reserved compatibility profile, disabled by default | `0` |
+| `IPV6_FORCE_DISABLE` | Reserved compatibility profile, disabled by default | `0` |
+| `VENDOR_FIX_PROFILE` | Reserved vendor profile (`none`, `oneplus`) | `none` |
+| `HOTSPOT_FIX` | Reserved hotspot compatibility profile | `0` |
 | `EXCLUDE_INTERFACES`| List of interfaces to explicitly ignore (OUTPUT) | (empty) |
-| `INCLUDE_INTERFACES`| List of additional interfaces to proxy (PREROUTING) | (empty) |
+
+### CLI Control
+
+Flux provides a CLI-only control plane:
+
+```bash
+/data/adb/flux/scripts/fluxctl status
+/data/adb/flux/scripts/fluxctl start
+/data/adb/flux/scripts/fluxctl stop
+/data/adb/flux/scripts/fluxctl restart
+/data/adb/flux/scripts/fluxctl diagnose
+/data/adb/flux/scripts/fluxctl rules-preview
+/data/adb/flux/scripts/fluxctl resync
+/data/adb/flux/scripts/fluxctl logs
+```
 
 ---
 

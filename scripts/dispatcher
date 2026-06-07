@@ -21,7 +21,12 @@
 set -eu
 [ -n "${BASH_VERSION:-}" ] && set -o pipefail
 
-readonly SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+_script_path="${0}"
+case "${_script_path}" in
+/*) ;;
+*) _script_path="${PWD}/${_script_path}" ;;
+esac
+readonly SCRIPT_DIR="${_script_path%/*}"
 
 . "${SCRIPT_DIR}/lib"
 . "${SCRIPT_DIR}/log"
@@ -36,19 +41,42 @@ load_config || exit 1
 
 _parallel_run() {
     local action="${1}"
-    local p1 p2 p3
+    local p_core p_tproxy p_addrsync rc
 
-    sh "${CORE_SCRIPT}" "${action}" </dev/null &
-    p1=$!
+    if [ "${action}" = "start" ]; then
+        sh "${CORE_SCRIPT}" start </dev/null &
+        p_core=$!
+        sh "${ADDRSYNC_SCRIPT}" start </dev/null &
+        p_addrsync=$!
+
+        if ! wait "${p_core}"; then
+            log_error "Core startup failed"
+            kill -9 "${p_addrsync}" 2>/dev/null || true
+            wait "${p_addrsync}" 2>/dev/null || true
+            sh "${ADDRSYNC_SCRIPT}" stop </dev/null || true
+            return 1
+        fi
+
+        sh "${TPROXY_SCRIPT}" start </dev/null &
+        p_tproxy=$!
+
+        rc=0
+        wait "${p_tproxy}" || rc=1
+        wait "${p_addrsync}" || rc=1
+        return "${rc}"
+    fi
+
     sh "${TPROXY_SCRIPT}" "${action}" </dev/null &
-    p2=$!
+    p_tproxy=$!
     sh "${ADDRSYNC_SCRIPT}" "${action}" </dev/null &
-    p3=$!
+    p_addrsync=$!
+    sh "${CORE_SCRIPT}" "${action}" </dev/null &
+    p_core=$!
 
     # Wait with 10s timeout and Fail-Fast
-    if ! wait_pids_timeout 10 "${p1}" "${p2}" "${p3}"; then
+    if ! wait_pids_timeout 10 "${p_tproxy}" "${p_addrsync}" "${p_core}"; then
         log_error "Parallel execution failed or timed out, killing children..."
-        kill -9 "${p1}" "${p2}" "${p3}" 2>/dev/null
+        kill -9 "${p_tproxy}" "${p_addrsync}" "${p_core}" 2>/dev/null
         return 1
     fi
 }
@@ -107,25 +135,27 @@ _state_stop() {
 
 _state_restart() {
     local changed="${1}"
+    local force="${2:-0}"
 
-    if ! _restart_debounced "${changed}"; then
+    if [ "${force}" != "1" ] && ! _restart_debounced "${changed}"; then
         log_debug "Skip duplicate config event: ${changed}"
         return 0
     fi
 
     _write_restart_stamp "${changed}"
-    rm -f "${EVENT_CACHE_OK}"
     log_info "Config update: ${changed}, full restart"
 
     log_banner "RESTARTING FLUX"
+
+    _parallel_run stop || true
+
+    rm -f "${EVENT_CACHE_OK}"
 
     if ! sh "${INIT_SCRIPT}" init; then
         log_error "Init failed"
         _state_fail
         return 1
     fi
-
-    _parallel_run stop || true
 
     if _parallel_run start; then
         sync_prop "RUNNING"
@@ -198,6 +228,21 @@ main() {
     local event_type="${1:-}"
     local watched_path="${2:-}"
     local event_name="${3:-${watched_path##*/}}"
+
+    case "${event_type}" in
+    start)
+        _with_dispatch_lock _state_start
+        return $?
+        ;;
+    stop)
+        _with_dispatch_lock _state_stop
+        return $?
+        ;;
+    restart)
+        _with_dispatch_lock _state_restart "${2:-manual}" 1
+        return $?
+        ;;
+    esac
 
     [ -n "${3:-}" ] && watched_path="${watched_path}/${event_name}"
 

@@ -115,7 +115,7 @@ sync_prop() {
     FAILED) emoji='🤯' ;;
     *) emoji='🤔' ;;
     esac
-    [ "${state}" = "RUNNING" ] && pid=$(cat "${SING_BOX_PID_FILE}" 2>/dev/null)
+    [ "${state}" = "RUNNING" ] && [ -f "${SING_BOX_PID_FILE}" ] && IFS= read -r pid <"${SING_BOX_PID_FILE}" || true
 
     local status="${emoji} [${state}]${pid:+ PID: ${pid}}"
 

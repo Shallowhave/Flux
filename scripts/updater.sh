@@ -9,7 +9,12 @@
 set -eu
 [ -n "${BASH_VERSION:-}" ] && set -o pipefail
 
-readonly SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+_script_path="${0}"
+case "${_script_path}" in
+/*) ;;
+*) _script_path="${PWD}/${_script_path}" ;;
+esac
+readonly SCRIPT_DIR="${_script_path%/*}"
 
 . "${SCRIPT_DIR}/lib"
 . "${SCRIPT_DIR}/log"
@@ -148,7 +153,7 @@ _transform_nodes() {
     log_debug "Executing unified processing pipeline..."
     if "${JQ_BIN}" -e '.outbounds? | type == "array"' "${input}" >/dev/null 2>&1; then
         log_debug "Detected sing-box format"
-        cat "${input}" | run_pipeline || {
+        run_pipeline <"${input}" || {
             log_error "Pipeline execution failed"
             return 1
         }
@@ -412,6 +417,20 @@ _validate_and_deploy() {
         return 1
     }
 
+    if [ -x "${SING_BOX_BIN}" ]; then
+        local check_file="${WORK_DIR}/check_config.json"
+        if "${JQ_BIN}" -s '.[0] as $template | .[1] as $nodes | $template | .outbounds = $nodes.outbounds' \
+            "${TEMPLATE_FILE}" "${new_cfg}" >"${check_file}" 2>/dev/null; then
+            :
+        else
+            cp -f "${new_cfg}" "${check_file}" || return 1
+        fi
+        if ! "${SING_BOX_BIN}" check -c "${check_file}" -D "${RUN_DIR}" >/dev/null 2>&1; then
+            log_error "sing-box validation failed, keeping current config"
+            return 1
+        fi
+    fi
+
     if [ -f "${core_cfg}" ] && cmp -s "${new_cfg}" "${core_cfg}"; then
         log_warn "Config unchanged, skip deploy"
         rm -f "${new_cfg}"
@@ -424,7 +443,11 @@ _validate_and_deploy() {
         log_debug "Backup created: $(basename "${core_cfg}.bak")"
     }
 
-    mv -f "${new_cfg}" "${core_cfg}" && chmod 644 "${core_cfg}"
+    if ! mv -f "${new_cfg}" "${core_cfg}"; then
+        log_error "Atomic deploy failed"
+        return 1
+    fi
+    chmod 644 "${core_cfg}"
     log_info "Deployed: ${count} nodes"
     return 0
 }

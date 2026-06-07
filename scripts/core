@@ -9,7 +9,12 @@
 set -eu
 [ -n "${BASH_VERSION:-}" ] && set -o pipefail
 
-readonly SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+_script_path="${0}"
+case "${_script_path}" in
+/*) ;;
+*) _script_path="${PWD}/${_script_path}" ;;
+esac
+readonly SCRIPT_DIR="${_script_path%/*}"
 
 . "${SCRIPT_DIR}/lib"
 . "${SCRIPT_DIR}/log"
@@ -57,7 +62,12 @@ _wait_for_ready() {
             return 1
         fi
 
-        if is_port_listening "${PROXY_PORT}"; then
+        if [ "${PROXY_MODE}" = "tun" ]; then
+            if [ -d "/sys/class/net/${TUN_INTERFACE}" ]; then
+                log_debug "Core ready on TUN ${TUN_INTERFACE}"
+                return 0
+            fi
+        elif is_port_listening "${PROXY_PORT}"; then
             log_debug "Core ready on port ${PROXY_PORT}"
             return 0
         fi

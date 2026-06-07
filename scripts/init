@@ -12,7 +12,12 @@
 set -eu
 [ -n "${BASH_VERSION:-}" ] && set -o pipefail
 
-readonly SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+_script_path="${0}"
+case "${_script_path}" in
+/*) ;;
+*) _script_path="${PWD}/${_script_path}" ;;
+esac
+readonly SCRIPT_DIR="${_script_path%/*}"
 
 . "${SCRIPT_DIR}/lib"
 . "${SCRIPT_DIR}/log"
@@ -38,7 +43,7 @@ _check_integrity() {
         }
     done
 
-    for script in "${CORE_SCRIPT}" "${TPROXY_SCRIPT}" "${ADDRSYNC_SCRIPT}" "${UPDATE_SCRIPT}"; do
+    for script in "${CORE_SCRIPT}" "${TPROXY_SCRIPT}" "${ADDRSYNC_SCRIPT}" "${UPDATE_SCRIPT}" "${FLUXCTL_SCRIPT}"; do
         [ ! -f "${script}" ] && {
             log_error "Script missing: ${script##*/}"
             return 1
@@ -118,6 +123,8 @@ _validate_cache() {
     set -a
     . "${CACHE_CONFIG_FILE}"
     set +a
+
+    awk '/^KFEAT_/ { print }' "${CACHE_CONFIG_FILE}" >"${CACHE_KERNEL_CAPS_FILE}" 2>/dev/null || true
 
     # Parallel rule generation for performance
     local pids=""

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "project": "Flux",
+  "generated_by": "manual",
+  "note": "Release packaging must fill version, source, target, and sha256 for every binary before publishing.",
+  "binaries": [
+    {
+      "name": "sing-box",
+      "path": "bin/sing-box",
+      "source": "",
+      "version": "",
+      "target": "android",
+      "sha256": ""
+    },
+    {
+      "name": "jq",
+      "path": "bin/jq",
+      "source": "",
+      "version": "",
+      "target": "android",
+      "sha256": ""
+    },
+    {
+      "name": "addrsyncd",
+      "path": "bin/addrsyncd",
+      "source": "D:/Github/addrsyncd",
+      "version": "",
+      "target": "android",
+      "sha256": ""
+    }
+  ],
+  "default_package_profiles": [
+    {
+      "name": "full",
+      "description": "Contains all required binaries."
+    },
+    {
+      "name": "lite",
+      "description": "Contains scripts and config; user supplies core binaries."
+    }
+  ]
+}

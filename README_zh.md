@@ -258,10 +258,31 @@ graph TD
 | 选项 | 描述 | 默认值 |
 |--------|-------------|---------|
 | `MSS_CLAMP_ENABLE`| 启用 TCP MSS 钳制 | `1` |
-| `BYPASS_IP_BACKEND`| `auto`=优先混合 ipset, `ipset`=强制 ipset, `tree`=强制纯 iptables 树 | `auto` |
-| `IPSET`| 兼容旧配置的别名: `0`=`auto`, `1`=`ipset`（仅在未设置 `BYPASS_IP_BACKEND` 时生效） | `0` |
+| `BLOCK_QUIC` | 全局阻断 UDP/443 QUIC | `0` |
+| `MARK_MASK` | Flux connmark 掩码 | `0xff` |
+| `RULE_BACKEND` | 规则后端（生产默认仅 `iptables_restore`） | `iptables_restore` |
+| `BYPASS_SET_BACKEND` | 绕过集合后端（`zone`, `ipset`, `auto`） | `zone` |
+| `PERFORMANCE_MODE` | 内核支持时启用 socket/conntrack 快路径 | `0` |
+| `PRIVATE_DNS_GUARD` | 预留兼容 profile，默认关闭 | `0` |
+| `IPV6_FORCE_DISABLE` | 预留兼容 profile，默认关闭 | `0` |
+| `VENDOR_FIX_PROFILE` | 预留厂商 profile（`none`, `oneplus`） | `none` |
+| `HOTSPOT_FIX` | 预留热点兼容 profile | `0` |
 | `EXCLUDE_INTERFACES`| 显式忽略的接口列表 (OUTPUT) | (空) |
-| `INCLUDE_INTERFACES`| 额外需要代理的接口列表 (PREROUTING) | (空) |
+
+### CLI 控制
+
+Flux 提供纯命令行控制入口：
+
+```bash
+/data/adb/flux/scripts/fluxctl status
+/data/adb/flux/scripts/fluxctl start
+/data/adb/flux/scripts/fluxctl stop
+/data/adb/flux/scripts/fluxctl restart
+/data/adb/flux/scripts/fluxctl diagnose
+/data/adb/flux/scripts/fluxctl rules-preview
+/data/adb/flux/scripts/fluxctl resync
+/data/adb/flux/scripts/fluxctl logs
+```
 
 ---
 

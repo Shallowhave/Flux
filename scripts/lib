@@ -90,6 +90,7 @@ readonly LOG_SCRIPT="${SCRIPTS_DIR}/log"
 readonly RULES_SCRIPT="${SCRIPTS_DIR}/rules"
 readonly TPROXY_SCRIPT="${SCRIPTS_DIR}/tproxy"
 readonly UPDATE_SCRIPT="${SCRIPTS_DIR}/updater.sh"
+readonly FLUXCTL_SCRIPT="${SCRIPTS_DIR}/fluxctl"
 
 # ==============================================================================
 # [ Cache Files ]
@@ -100,6 +101,11 @@ readonly CACHE_RULES_V4_FILE="${CACHE_DIR}/cache_rules_ipv4"
 readonly CACHE_RULES_V6_FILE="${CACHE_DIR}/cache_rules_ipv6"
 readonly CACHE_CLEANUP_V4_FILE="${CACHE_DIR}/cache_cleanup_ipv4"
 readonly CACHE_CLEANUP_V6_FILE="${CACHE_DIR}/cache_cleanup_ipv6"
+readonly CACHE_KERNEL_CAPS_FILE="${CACHE_DIR}/cache_kernel_caps"
+readonly ACTIVE_CLEANUP_V4_FILE="${RUN_DIR}/active_cleanup_ipv4"
+readonly ACTIVE_CLEANUP_V6_FILE="${RUN_DIR}/active_cleanup_ipv6"
+readonly ACTIVE_FEATURES_FILE="${RUN_DIR}/active_features"
+readonly ACTIVE_RUNTIME_FILE="${RUN_DIR}/active_runtime"
 
 # ==============================================================================
 # [ File Utilities ]
@@ -178,6 +184,20 @@ is_int() {
     return 0
 }
 
+# Check whether a proc-style word list contains an exact line.
+# Usage: proc_has_word FILE WORD
+proc_has_word() {
+    local file="${1}"
+    local word="${2}"
+    local line
+
+    [ -r "${file}" ] || return 1
+    while IFS= read -r line; do
+        [ "${line}" = "${word}" ] && return 0
+    done <"${file}"
+    return 1
+}
+
 # Check if a port is listening
 # Usage: is_port_listening PORT
 is_port_listening() {
@@ -202,7 +222,7 @@ read_pid_file() {
 
     [ -f "${pid_file}" ] || return 0
 
-    pid=$(cat "${pid_file}" 2>/dev/null) || {
+    IFS= read -r pid <"${pid_file}" || {
         log_error "Failed reading ${label} pid file"
         return 1
     }
@@ -494,6 +514,7 @@ load_config() {
     }
 
     if { _process_settings && _detect_kernel; } >"${tmp_cfg}"; then
+        [ -d "${CACHE_DIR}" ] && awk '/^KFEAT_/ { print }' "${tmp_cfg}" >"${CACHE_KERNEL_CAPS_FILE}" 2>/dev/null || true
         set -a
         . "${tmp_cfg}"
         set +a
