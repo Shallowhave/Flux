@@ -437,6 +437,7 @@ _detect_kernel() {
     printf "# Kernel Features\n"
 
     local module_t=0 module_o=0 module_m=0 module_a=0 module_c=0 module_i=0 module_s=0 module_set=0 module_tun=0
+    local module_nf_nat=0
     [ -d /sys/module/xt_TPROXY ] && module_t=1
     [ -d /sys/module/xt_owner ] && module_o=1
     [ -d /sys/module/xt_mark ] && module_m=1
@@ -445,6 +446,14 @@ _detect_kernel() {
     [ -d /sys/module/xt_socket ] && module_s=1
     { [ -d /sys/module/ip_set ] || [ -d /sys/module/xt_set ]; } && module_set=1
     { [ -d /sys/module/ip6table_nat ] || [ -d /sys/module/nf_nat_ipv6 ]; } && module_i=1
+    [ -d /sys/module/nf_nat ] && module_nf_nat=1
+    # P4d: kernels >= 5.1 (commit f4dd13d92b75) unified IPv4/IPv6 NAT into a
+    # single nf_nat module. The legacy ip6table_nat/nf_nat_ipv6 modules may be
+    # absent on minimized vendor configs while nf_nat alone covers IPv6 NAT.
+    # Gate on /proc/sys/net/ipv6 to avoid claiming IPv6 NAT on IPv6-less kernels.
+    if [ "${module_nf_nat}" = "1" ] && [ -d /proc/sys/net/ipv6 ]; then
+        module_i=1
+    fi
     { [ -c /dev/net/tun ] || [ -c /dev/tun ]; } && module_tun=1
 
     local kfeat_out
@@ -454,6 +463,7 @@ _detect_kernel() {
             -v ma="${module_a}" -v mc="${module_c}" -v mi="${module_i}" \
             -v ms="${module_s}" -v mset="${module_set}" \
             -v mtun="${module_tun}" \
+            -v ipv6="$( [ -d /proc/sys/net/ipv6 ] && echo 1 || echo 0 )" \
             -v nft="$(command -v nft >/dev/null 2>&1 && echo 1 || echo 0)" '
             BEGIN {
                 # Whitelist of features to detect
@@ -466,6 +476,7 @@ _detect_kernel() {
                 f["CONFIG_IP_SET"] = "KFEAT_IPSET"
                 f["CONFIG_NF_TABLES"] = "KFEAT_NFT"
                 f["CONFIG_IP6_NF_NAT"]                 = "KFEAT_IPV6_NAT"
+                f["CONFIG_NF_NAT"]                     = "KFEAT_NF_NAT"
                 f["CONFIG_TUN"] = "KFEAT_TUN"
             }
             {
@@ -481,6 +492,10 @@ _detect_kernel() {
                 if (ma) res["KFEAT_ADDRTYPE"] = 1
                 if (mc) res["KFEAT_CONNTRACK"] = 1
                 if (mi) res["KFEAT_IPV6_NAT"] = 1
+                # P4d: unified nf_nat (kernel >= 5.1, commit f4dd13d92b75)
+                # is sufficient evidence of IPv6 NAT when IPv6 is present.
+                # The "ipv6" arg is the host /proc/sys/net/ipv6 probe.
+                if (ipv6 && res["KFEAT_NF_NAT"]) res["KFEAT_IPV6_NAT"] = 1
                 if (ms) res["KFEAT_SOCKET"] = 1
                 if (ms) res["KFEAT_SOCKET_TCP"] = 1
                 res["KFEAT_SOCKET_UDP"] = 0
@@ -507,11 +522,18 @@ _detect_kernel() {
         proc_has_word /proc/net/ip_tables_matches socket && s=1
         proc_has_word /proc/net/ip_tables_matches set && setf=1
         proc_has_word /proc/net/ip6_tables_names nat && i=1
+        # P4d: REF kernel commit f4dd13d92b75 merged IPv4/IPv6 NAT helpers
+        # in 5.1+. On minimized configs CONFIG_IP6_NF_NAT may be absent while
+        # CONFIG_NF_NAT=y provides the capability. The /proc/sys/net/ipv6
+        # guard prevents claiming IPv6 NAT on IPv6-less kernels.
+        if [ "${module_nf_nat}" = "1" ] && [ -d /proc/sys/net/ipv6 ]; then
+            i=1
+        fi
         command -v ipset >/dev/null 2>&1 && setf=1
         command -v nft >/dev/null 2>&1 && nft=1
 
-        kfeat_out=$(printf 'KFEAT_TPROXY=%d\nKFEAT_OWNER=%d\nKFEAT_MARK=%d\nKFEAT_ADDRTYPE=%d\nKFEAT_CONNTRACK=%d\nKFEAT_SOCKET=%d\nKFEAT_SOCKET_TCP=%d\nKFEAT_SOCKET_UDP=%d\nKFEAT_IPSET=%d\nKFEAT_NFT=%d\nKFEAT_IPV6_NAT=%d\nKFEAT_TUN=%d\n' \
-            "$t" "$o" "$m" "$a" "$c" "$s" "$s" 0 "$setf" "$nft" "$i" "$tun")
+        kfeat_out=$(printf 'KFEAT_TPROXY=%d\nKFEAT_OWNER=%d\nKFEAT_MARK=%d\nKFEAT_ADDRTYPE=%d\nKFEAT_CONNTRACK=%d\nKFEAT_SOCKET=%d\nKFEAT_SOCKET_TCP=%d\nKFEAT_SOCKET_UDP=%d\nKFEAT_IPSET=%d\nKFEAT_NFT=%d\nKFEAT_IPV6_NAT=%d\nKFEAT_NF_NAT=%d\nKFEAT_TUN=%d\n' \
+            "$t" "$o" "$m" "$a" "$c" "$s" "$s" 0 "$setf" "$nft" "$i" "$module_nf_nat" "$tun")
     fi
 
     printf '%s\n' "${kfeat_out}"
