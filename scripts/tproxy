@@ -124,6 +124,9 @@ _snapshot_active_runtime() {
         printf 'PREV_DISABLE_IPV6_DEFAULT=%s\n' "$(_read_file_value /proc/sys/net/ipv6/conf/default/disable_ipv6 "")"
         printf 'PREV_IPV4_FORWARD=%s\n' "$(_read_file_value /proc/sys/net/ipv4/ip_forward "")"
         printf 'PREV_IPV6_FORWARD=%s\n' "$(_read_file_value /proc/sys/net/ipv6/conf/all/forwarding "")"
+        printf 'PREV_NF_CONNTRACK_MAX=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_max "")"
+        printf 'PREV_NF_CONNTRACK_UDP_STREAM=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream "")"
+        printf 'PREV_NF_CONNTRACK_TCP_CLOSE_WAIT=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "")"
         [ -n "${v4_hash}" ] && printf 'CLEANUP_V4_SHA256=%s\n' "${v4_hash}"
         [ -n "${v6_hash}" ] && printf 'CLEANUP_V6_SHA256=%s\n' "${v6_hash}"
     } >"${tmp}" || return 1
@@ -173,6 +176,9 @@ _snapshot_active_features() {
         [ "${guard_mode}" != "off" ] && printf 'PRIVATE_DNS_GUARD_MODE=%s\n' "${guard_mode}"
         [ "${IPV6_FORCE_DISABLE}" = "1" ] && printf '%s\n' "IPV6_FORCE_DISABLE=1"
         [ "${HOTSPOT_FIX}" = "1" ] && printf '%s\n' "HOTSPOT_FIX=1"
+        [ -n "${CONNTRACK_MAX}" ] && printf '%s\n' "CONNTRACK_MAX=1"
+        [ -n "${CONNTRACK_UDP_STREAM_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_UDP_STREAM_TIMEOUT=1"
+        [ -n "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT=1"
         [ "${VENDOR_FIX_PROFILE}" != "none" ] && printf '%s\n' "VENDOR_FIX_PROFILE=${VENDOR_FIX_PROFILE}"
     } >"${ACTIVE_FEATURES_FILE}.tmp"
     if [ -s "${ACTIVE_FEATURES_FILE}.tmp" ]; then
@@ -315,6 +321,18 @@ _apply_compat_profiles() {
         [ "${PROXY_IPV6}" = "1" ] && _write_file_value /proc/sys/net/ipv6/conf/all/forwarding 1 || true
     fi
 
+    if [ -n "${CONNTRACK_MAX}" ]; then
+        _write_file_value /proc/sys/net/netfilter/nf_conntrack_max "${CONNTRACK_MAX}" || log_warn "Cannot set nf_conntrack_max"
+    fi
+
+    if [ -n "${CONNTRACK_UDP_STREAM_TIMEOUT}" ]; then
+        _write_file_value /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream "${CONNTRACK_UDP_STREAM_TIMEOUT}" || log_warn "Cannot set nf_conntrack_udp_timeout_stream"
+    fi
+
+    if [ -n "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" ]; then
+        _write_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" || log_warn "Cannot set nf_conntrack_tcp_timeout_close_wait"
+    fi
+
     if [ "${VENDOR_FIX_PROFILE}" != "none" ]; then
         log_warn "Vendor fix profile '${VENDOR_FIX_PROFILE}' is recorded but has no generic safe action"
     fi
@@ -343,6 +361,21 @@ _restore_compat_profiles() {
         [ -n "${value}" ] && _write_file_value /proc/sys/net/ipv4/ip_forward "${value}" || true
         value="$(_active_runtime_value PREV_IPV6_FORWARD "")"
         [ -n "${value}" ] && _write_file_value /proc/sys/net/ipv6/conf/all/forwarding "${value}" || true
+    fi
+
+    if _active_feature_enabled "CONNTRACK_MAX"; then
+        value="$(_active_runtime_value PREV_NF_CONNTRACK_MAX "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/netfilter/nf_conntrack_max "${value}" || true
+    fi
+
+    if _active_feature_enabled "CONNTRACK_UDP_STREAM_TIMEOUT"; then
+        value="$(_active_runtime_value PREV_NF_CONNTRACK_UDP_STREAM "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream "${value}" || true
+    fi
+
+    if _active_feature_enabled "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT"; then
+        value="$(_active_runtime_value PREV_NF_CONNTRACK_TCP_CLOSE_WAIT "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "${value}" || true
     fi
     return 0
 }

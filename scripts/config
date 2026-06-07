@@ -148,6 +148,9 @@ PRIVATE_DNS_GUARD:enum:off:off,strict,auto,0,1
 IPV6_FORCE_DISABLE:int:0:0:1
 VENDOR_FIX_PROFILE:enum:none:none,oneplus
 HOTSPOT_FIX:int:0:0:1
+CONNTRACK_MAX:int::1024:16777216
+CONNTRACK_UDP_STREAM_TIMEOUT:int::1:7200
+CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT:int::1:7200
 EXCLUDE_INTERFACES:iface_list::
 UPDATER_EXCLUDE_REMARKS:regex:(expire|traffic|官网|到期|流量|剩余|套餐|重置|联系|群组|通知|平台|网站|时间|建议|反馈|版本|更新)
 UPDATER_RENAME_RULES:json:[]
