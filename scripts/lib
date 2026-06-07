@@ -21,7 +21,14 @@ readonly BYPASS_MARK=0x11
 # ==============================================================================
 
 readonly BOOT_TIMEOUT=60   # Max wait for system boot (seconds)
-readonly IPTABLES_WAIT=100 # iptables lock wait timeout (centiseconds)
+# iptables lock wait timeout, in SECONDS (not centiseconds).
+# REF: iptables 1.6+ `-w[seconds]` and `iptables-restore --wait[=seconds]`
+#      both interpret the numeric argument as seconds. The kernel iptables
+#      source parses it via strtoul into OPT_WAIT_INTERVAL seconds.
+# REF: AOSP system/netd/server/IptablesRestoreController.cpp uses a 5 s
+#      wait. Fail fast and let the upstream dispatcher lock arbitrate
+#      rather than blocking a stage for many seconds on a hung lock.
+readonly IPTABLES_WAIT=5
 readonly RESTART_DEBOUNCE_SEC=10
 
 # Internal defaults for knobs that were once user-tunable but only
@@ -235,10 +242,10 @@ dump_tombstone() {
         tail -n 50 "${FLUX_LOG:-/data/adb/flux/run/flux.log}" 2>/dev/null
 
         printf '\n== iptables -t mangle -L -n -v ==\n'
-        iptables -w "${IPTABLES_WAIT:-100}" -t mangle -L -n -v 2>/dev/null
+        iptables -w "${IPTABLES_WAIT:-5}" -t mangle -L -n -v 2>/dev/null
 
         printf '\n== ip6tables -t mangle -L -n -v ==\n'
-        ip6tables -w "${IPTABLES_WAIT:-100}" -t mangle -L -n -v 2>/dev/null
+        ip6tables -w "${IPTABLES_WAIT:-5}" -t mangle -L -n -v 2>/dev/null
 
         printf '\n== ip -4 rule ==\n'; ip -4 rule 2>/dev/null
         printf '\n== ip -6 rule ==\n'; ip -6 rule 2>/dev/null
