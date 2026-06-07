@@ -158,9 +158,15 @@ _remove_active_cleanup() {
 
 _snapshot_active_features() {
     rm -f "${ACTIVE_FEATURES_FILE}" 2>/dev/null || true
+    # REF: PRIVATE_DNS_GUARD is now an enum (off/strict/auto with 0/1 aliases).
+    #      Restore semantics live in _apply_compat_profiles, which sets the
+    #      PRIVATE_DNS_GUARD=1 flag here only after an actual override.
+    #      Snapshot is deferred to _apply_compat_profiles for this feature.
+    local guard_mode
+    guard_mode="$(_resolve_dns_guard_mode)"
     {
         [ "${BLOCK_QUIC}" = "1" ] && printf '%s\n' "BLOCK_QUIC=1"
-        [ "${PRIVATE_DNS_GUARD}" = "1" ] && printf '%s\n' "PRIVATE_DNS_GUARD=1"
+        [ "${guard_mode}" != "off" ] && printf 'PRIVATE_DNS_GUARD_MODE=%s\n' "${guard_mode}"
         [ "${IPV6_FORCE_DISABLE}" = "1" ] && printf '%s\n' "IPV6_FORCE_DISABLE=1"
         [ "${HOTSPOT_FIX}" = "1" ] && printf '%s\n' "HOTSPOT_FIX=1"
         [ "${VENDOR_FIX_PROFILE}" != "none" ] && printf '%s\n' "VENDOR_FIX_PROFILE=${VENDOR_FIX_PROFILE}"
@@ -211,10 +217,85 @@ _block_quic() {
     return 0
 }
 
+# Normalize PRIVATE_DNS_GUARD value.
+# REF: Schema (scripts/config:146) accepts {off, strict, auto, 0, 1} where
+#      0/1 are backwards-compat aliases for the previous int form:
+#        0 -> off (no action)
+#        1 -> strict (force private_dns_mode=off — original behavior)
+#      "auto" is the new cooperative mode (see _resolve_dns_guard_action).
+_resolve_dns_guard_mode() {
+    case "${PRIVATE_DNS_GUARD}" in
+    0 | off) printf 'off' ;;
+    1 | strict) printf 'strict' ;;
+    auto) printf 'auto' ;;
+    *) printf 'off' ;;
+    esac
+}
+
+# Decide whether to override Private DNS for this Flux session.
+# Strict: always override. Off: never.
+# Auto: override only when sing-box's DNS plane would actually conflict
+#       with the user's Private DNS choice.
+# REF: Android Private DNS modes (Settings.Global.PRIVATE_DNS_MODE):
+#        "off"            — DoT disabled, plain DNS via netd resolver.
+#                           sing-box hijack-dns rule + tproxy redirect captures
+#                           UDP/53 cleanly. No conflict, no override needed.
+#        "opportunistic"  — try DoT, fall back to plain DNS. The plain-DNS
+#                           fallback is also captured by tproxy. No override.
+#        "hostname"       — strict DoT to a user-specified resolver on TCP/853.
+#                           This bypasses sing-box entirely. Conflict — override.
+#      Value constants: ConnectivitySettingsManager.PRIVATE_DNS_MODE_*
+#      (formerly ConnectivityManager.PRIVATE_DNS_MODE_*).
+# REF: PROXY_MODE=tun — sing-box's TUN inbound owns the DNS plane via the
+#      tun "auto-route" + system DNS hijack. Private DNS still goes to its
+#      configured resolver via the TUN, which sing-box can decide to proxy
+#      or bypass. No override is needed regardless of the Private DNS mode.
+_resolve_dns_guard_action() {
+    local mode="${1}"
+    local current="${2}"
+    case "${mode}" in
+    strict) printf 'override' ;;
+    off) printf 'noop' ;;
+    auto)
+        # TUN mode: sing-box owns DNS plane via the tun inbound; no override.
+        if [ "${PROXY_MODE}" = "tun" ]; then
+            printf 'noop'
+            return 0
+        fi
+        # tproxy mode: only "hostname" (strict DoT) bypasses sing-box.
+        # "off" and "opportunistic" both let plain DNS through, which is
+        # captured by the tproxy hijack-dns rule in template.json.
+        case "${current}" in
+        hostname) printf 'override' ;;
+        *) printf 'noop' ;;
+        esac
+        ;;
+    *) printf 'noop' ;;
+    esac
+}
+
 _apply_compat_profiles() {
-    if [ "${PRIVATE_DNS_GUARD}" = "1" ]; then
+    local guard_mode
+    guard_mode="$(_resolve_dns_guard_mode)"
+
+    if [ "${guard_mode}" != "off" ]; then
         if command -v settings >/dev/null 2>&1; then
-            settings put global private_dns_mode off >/dev/null 2>&1 || log_warn "Private DNS guard failed"
+            local cur_mode action
+            cur_mode=$(settings get global private_dns_mode 2>/dev/null || printf '')
+            action=$(_resolve_dns_guard_action "${guard_mode}" "${cur_mode}")
+            if [ "${action}" = "override" ]; then
+                if settings put global private_dns_mode off >/dev/null 2>&1; then
+                    # REF: _restore_compat_profiles checks PRIVATE_DNS_GUARD=1
+                    #      flag (scripts/tproxy:_active_feature_enabled). Only
+                    #      set it when an override actually took effect, so
+                    #      restore on stop is a no-op for cooperative mode.
+                    [ -f "${ACTIVE_FEATURES_FILE}" ] && printf 'PRIVATE_DNS_GUARD=1\n' >>"${ACTIVE_FEATURES_FILE}"
+                else
+                    log_warn "Private DNS guard failed"
+                fi
+            else
+                log_debug "PRIVATE_DNS_GUARD=${guard_mode}: cooperative (current=${cur_mode}, no override needed)"
+            fi
         else
             log_warn "settings command missing, skip Private DNS guard"
         fi
