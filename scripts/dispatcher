@@ -39,6 +39,32 @@ load_config || exit 1
 # [ Component Control ]
 # ==============================================================================
 
+# REF: NetProxy-Magisk pattern — staged startup requires explicit readiness gate
+#      before applying tproxy rules. The core start script returning success only
+#      proves its supervisor exited; it does NOT prove sing-box is accepting
+#      connections (race between PID-write and listening socket).
+# REF: scripts/core:_wait_for_ready does this for the core script itself; we
+#      re-verify at dispatch level because `wait $p_core` short-circuits if
+#      the start script's readiness loop returned before the kernel finalized
+#      the listening socket (observed under load on slow devices).
+_verify_core_actually_ready() {
+    local attempt=0
+    local max_attempts=3
+
+    while [ "${attempt}" -lt "${max_attempts}" ]; do
+        if [ "${PROXY_MODE}" = "tun" ]; then
+            # REF: scripts/core:_wait_for_ready uses identical sysfs check.
+            [ -d "/sys/class/net/${TUN_INTERFACE}" ] && return 0
+        else
+            # REF: scripts/lib:is_port_listening uses `ss -Hltn sport`.
+            is_port_listening "${PROXY_PORT}" >/dev/null 2>&1 && return 0
+        fi
+        attempt=$((attempt + 1))
+        [ "${attempt}" -lt "${max_attempts}" ] && sleep 1
+    done
+    return 1
+}
+
 _parallel_run() {
     local action="${1}"
     local p_core p_tproxy p_addrsync rc
@@ -55,6 +81,24 @@ _parallel_run() {
             wait "${p_addrsync}" 2>/dev/null || true
             sh "${ADDRSYNC_SCRIPT}" stop </dev/null || true
             return 1
+        fi
+
+        # REF: NetProxy-Magisk waits for core listening port before applying
+        #      tproxy. `wait $p_core` only confirms the start script exited
+        #      successfully — it does NOT confirm sing-box is actually accepting
+        #      connections. Re-verify here.
+        if ! _verify_core_actually_ready; then
+            log_error "Core readiness verification failed after start"
+            kill -9 "${p_addrsync}" 2>/dev/null || true
+            wait "${p_addrsync}" 2>/dev/null || true
+            sh "${ADDRSYNC_SCRIPT}" stop </dev/null || true
+            return 1
+        fi
+
+        # REF: addrsync still starts in parallel here; this comment flags the
+        #      timing race for future hardening (P3: blue-green restart).
+        if kill -0 "${p_addrsync}" 2>/dev/null; then
+            log_warn "tproxy launching while addrsync is still starting (timing race tolerated)"
         fi
 
         sh "${TPROXY_SCRIPT}" start </dev/null &
