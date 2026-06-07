@@ -260,6 +260,131 @@ logs_cmd() {
     fi
 }
 
+# ==============================================================================
+# [ Stats Command ]
+# REF: iptables -L -v -n -x output is standard; counter values reflect rule
+#      activity since chain creation (or zeroing). -x prints exact byte counts.
+# REF: sing-box Clash API /connections endpoint returns the Snapshot struct
+#      defined in experimental/clashapi/trafficontrol — shape:
+#        {"downloadTotal": int64, "uploadTotal": int64,
+#         "connections": [tracker, ...], "memory": uint64}
+#      Config: .experimental.clash_api.external_controller, .secret
+#      Docs:   https://sing-box.sagernet.org/configuration/experimental/clash-api/
+# REF: Analysis Section 3.6 (Observability) — user-requested low-hanging fruit.
+# ==============================================================================
+
+_stats_iptables_chain() {
+    local cmd="${1}"
+    local table="${2}"
+    local chain="${3}"
+
+    # REF: iptables-save and iptables share the same binary footprint on
+    #      Android (busybox/AOSP). If `iptables` is absent, print "missing"
+    #      and continue rather than aborting the whole stats output.
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+        printf '  %s -t %s -L %s: %s missing\n' "${cmd}" "${table}" "${chain}" "${cmd}"
+        return 0
+    fi
+
+    # The chain may not exist (e.g., IPv6 disabled, or rules never applied).
+    # Suppress noisy "No chain/target/match" stderr; report empty.
+    local out
+    if ! out=$("${cmd}" -t "${table}" -L "${chain}" -v -n -x 2>/dev/null); then
+        printf '  %s -t %s -L %s: chain not present\n' "${cmd}" "${table}" "${chain}"
+        return 0
+    fi
+    printf '  [%s -t %s -L %s -v -n -x]\n' "${cmd}" "${table}" "${chain}"
+    printf '%s\n' "${out}" | sed 's/^/    /'
+}
+
+_stats_clash_connections() {
+    # REF: sing-box Clash API config path:
+    #      .experimental.clash_api.external_controller (e.g., "127.0.0.1:9090")
+    #      Returns null if section absent. We treat any missing/null/error
+    #      as "not available".
+    if [ ! -s "${CONFIG_FILE}" ] || [ ! -x "${JQ_BIN}" ]; then
+        printf '  not available (config or jq missing)\n'
+        return 0
+    fi
+
+    local controller
+    controller=$("${JQ_BIN}" -r '.experimental.clash_api.external_controller // empty' "${CONFIG_FILE}" 2>/dev/null) || controller=""
+
+    if [ -z "${controller}" ]; then
+        printf '  not available (clash_api not configured)\n'
+        return 0
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        printf '  not available (curl missing)\n'
+        return 0
+    fi
+
+    # Normalize bare "host:port" -> URL. Accept "0.0.0.0:9090" by routing to 127.0.0.1.
+    local host_port="${controller}"
+    case "${host_port}" in
+    0.0.0.0:*) host_port="127.0.0.1:${host_port#0.0.0.0:}" ;;
+    \[::\]:*) host_port="127.0.0.1:${host_port#\[::\]:}" ;;
+    esac
+
+    # REF: Clash API token — sing-box reads .experimental.clash_api.secret.
+    local secret
+    secret=$("${JQ_BIN}" -r '.experimental.clash_api.secret // empty' "${CONFIG_FILE}" 2>/dev/null) || secret=""
+
+    local auth_args=""
+    [ -n "${secret}" ] && auth_args="-H Authorization: Bearer ${secret}"
+
+    local body
+    # shellcheck disable=SC2086
+    if ! body=$(curl -fsS --max-time 3 ${auth_args} "http://${host_port}/connections" 2>/dev/null); then
+        printf '  not available (curl to http://%s/connections failed)\n' "${host_port}"
+        return 0
+    fi
+
+    local count
+    count=$(printf '%s' "${body}" | "${JQ_BIN}" -r '.connections | length' 2>/dev/null) || count=""
+    if [ -z "${count}" ]; then
+        printf '  not available (unexpected response from %s)\n' "${host_port}"
+        return 0
+    fi
+    printf '  controller: %s\n' "${host_port}"
+    printf '  connections: %s\n' "${count}"
+}
+
+stats_cmd() {
+    [ "${CONFIG_READY}" = "1" ] || {
+        log_error "Config is not ready"
+        return 1
+    }
+
+    printf '[iptables mangle counters]\n'
+    _stats_iptables_chain iptables mangle PROXY_PREROUTING
+    _stats_iptables_chain iptables mangle PROXY_OUTPUT
+    if [ "${PROXY_IPV6}" = "1" ]; then
+        _stats_iptables_chain ip6tables mangle PROXY_PREROUTING
+        _stats_iptables_chain ip6tables mangle PROXY_OUTPUT
+    fi
+
+    printf '\n[addrsyncd]\n'
+    # REF: addrsyncd `status` prints one of:
+    #        "running pid=N"
+    #        "stopped"
+    #        "stopped(config invalid: ...)"
+    #      (see addrsyncd/src/control.rs:159-171 print_status, and
+    #       addrsyncd/README.md L71-74). No tracked-IP count is exposed
+    #      today; we surface only the lifecycle line.
+    if [ -x "${ADDRSYNCD_BIN}" ] && [ -f "${ADDRSYNCD_CONF_FILE}" ]; then
+        local asyn_status
+        asyn_status=$("${ADDRSYNCD_BIN}" -c "${ADDRSYNCD_CONF_FILE}" -d "${RUN_DIR}" status 2>/dev/null || printf 'unknown')
+        printf '  status: %s\n' "${asyn_status}"
+    else
+        printf '  status: unavailable (binary or config missing)\n'
+    fi
+
+    printf '\n[sing-box connections]\n'
+    _stats_clash_connections
+}
+
 main() {
     local action="${1:-status}"
     shift || true
@@ -289,8 +414,11 @@ main() {
     validate)
         validate_cmd
         ;;
+    stats)
+        stats_cmd
+        ;;
     *)
-        echo "Usage: $0 {status|start|stop|restart|diagnose|rules-preview|resync|logs [file]|validate}"
+        echo "Usage: $0 {status|start|stop|restart|diagnose|rules-preview|resync|logs [file]|validate|stats}"
         exit 1
         ;;
     esac
