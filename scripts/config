@@ -143,6 +143,7 @@ MARK_MASK:mark:0xff
 RULE_BACKEND:enum:iptables_restore:iptables_restore,nft
 BYPASS_SET_BACKEND:enum:zone:zone,ipset,auto
 PERFORMANCE_MODE:int:0:0:1
+SOCKET_UDP_PROBE:enum:auto:auto,off,on
 PRIVATE_DNS_GUARD:enum:off:off,strict,auto,0,1
 IPV6_FORCE_DISABLE:int:0:0:1
 VENDOR_FIX_PROFILE:enum:none:none,oneplus
@@ -398,6 +399,39 @@ _process_settings() {
 # ==============================================================================
 # [ Kernel Feature Detection ]
 # ==============================================================================
+# Probe for xt_socket UDP --transparent support.
+# REF: kernel commit c7f49c97e85b ("netfilter: xt_socket: add
+#      XT_SOCKET_RESTORESKMARK flag") + follow-ups stabilized the
+#      UDP --transparent path by 4.19.
+# REF: GKI android-base.config CONFIG_NETFILTER_XT_MATCH_SOCKET=y on 5.4+.
+# REF: sing-box protocol/tproxy/inbound.go binds UDP with IP_TRANSPARENT,
+#      satisfying the kernel prerequisite at runtime.
+_probe_socket_udp() {
+    local kfeat_socket="${1:-${KFEAT_SOCKET:-0}}"
+    case "${SOCKET_UDP_PROBE:-auto}" in
+        off|0|false)   printf 0; return ;;
+        on|1|true)     printf 1; return ;;
+    esac
+    # auto path
+    [ "${kfeat_socket}" = "1" ] || { printf 0; return; }
+    local kver major minor
+    kver=$(uname -r 2>/dev/null) || { printf 0; return; }
+    major=${kver%%.*}
+    minor=${kver#*.}
+    minor=${minor%%.*}
+    case "${major}" in
+        ''|*[!0-9]*) printf 0; return ;;
+    esac
+    case "${minor}" in
+        ''|*[!0-9]*) minor=0 ;;
+    esac
+    if [ "${major}" -gt 4 ] || { [ "${major}" -eq 4 ] && [ "${minor}" -ge 19 ]; }; then
+        printf 1
+    else
+        printf 0
+    fi
+}
+
 # Detect kernel features, set variables, and output to stdout
 _detect_kernel() {
     printf "# Kernel Features\n"
@@ -413,8 +447,9 @@ _detect_kernel() {
     { [ -d /sys/module/ip6table_nat ] || [ -d /sys/module/nf_nat_ipv6 ]; } && module_i=1
     { [ -c /dev/net/tun ] || [ -c /dev/tun ]; } && module_tun=1
 
+    local kfeat_out
     if [ -f /proc/config.gz ]; then
-        zcat /proc/config.gz 2>/dev/null | awk \
+        kfeat_out=$(zcat /proc/config.gz 2>/dev/null | awk \
             -v mt="${module_t}" -v mo="${module_o}" -v mm="${module_m}" \
             -v ma="${module_a}" -v mc="${module_c}" -v mi="${module_i}" \
             -v ms="${module_s}" -v mset="${module_set}" \
@@ -459,7 +494,7 @@ _detect_kernel() {
                 printf "KFEAT_SOCKET_TCP=%d\n", res["KFEAT_SOCKET_TCP"]+0
                 printf "KFEAT_SOCKET_UDP=%d\n", res["KFEAT_SOCKET_UDP"]+0
             }
-        '
+        ')
     else
         log_warn "/proc/config.gz missing, falling back to module detection"
         local t="${module_t}" o="${module_o}" m="${module_m}" a="${module_a}" c="${module_c}" i="${module_i}"
@@ -475,9 +510,21 @@ _detect_kernel() {
         command -v ipset >/dev/null 2>&1 && setf=1
         command -v nft >/dev/null 2>&1 && nft=1
 
-        printf 'KFEAT_TPROXY=%d\nKFEAT_OWNER=%d\nKFEAT_MARK=%d\nKFEAT_ADDRTYPE=%d\nKFEAT_CONNTRACK=%d\nKFEAT_SOCKET=%d\nKFEAT_SOCKET_TCP=%d\nKFEAT_SOCKET_UDP=%d\nKFEAT_IPSET=%d\nKFEAT_NFT=%d\nKFEAT_IPV6_NAT=%d\nKFEAT_TUN=%d\n' \
-            "$t" "$o" "$m" "$a" "$c" "$s" "$s" 0 "$setf" "$nft" "$i" "$tun"
+        kfeat_out=$(printf 'KFEAT_TPROXY=%d\nKFEAT_OWNER=%d\nKFEAT_MARK=%d\nKFEAT_ADDRTYPE=%d\nKFEAT_CONNTRACK=%d\nKFEAT_SOCKET=%d\nKFEAT_SOCKET_TCP=%d\nKFEAT_SOCKET_UDP=%d\nKFEAT_IPSET=%d\nKFEAT_NFT=%d\nKFEAT_IPV6_NAT=%d\nKFEAT_TUN=%d\n' \
+            "$t" "$o" "$m" "$a" "$c" "$s" "$s" 0 "$setf" "$nft" "$i" "$tun")
     fi
+
+    printf '%s\n' "${kfeat_out}"
+
+    # P4a: override hardcoded KFEAT_SOCKET_UDP=0 with runtime probe.
+    # The KFEAT_SOCKET value emitted above is the source of truth; extract it
+    # and feed it to the probe so that this override path works whether or not
+    # SOCKET_UDP_PROBE has already been sourced into the shell environment.
+    # Sourcing this output later (set -a; . file) makes the later assignment
+    # win, so the hardcoded 0 above is harmless.
+    local _kfeat_socket
+    _kfeat_socket=$(printf '%s\n' "${kfeat_out}" | awk -F= '$1=="KFEAT_SOCKET"{print $2; exit}')
+    printf 'KFEAT_SOCKET_UDP=%d\n' "$(_probe_socket_udp "${_kfeat_socket:-0}")"
 }
 
 # ==============================================================================
