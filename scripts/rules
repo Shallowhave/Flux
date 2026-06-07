@@ -29,16 +29,57 @@ readonly HOTSPOT_V6_RANGE="fe80::/10"
 # IPv6 Zones: Based on first hex nibble (e.g., 2001:: → zone 2)
 #
 # Always enabled for stable O(1) zone routing.
+_read_bypass_user_list() {
+    local file="${1}"
+    local family="${2}"
+    [ -r "${file}" ] || return 0
+
+    local line stripped
+    while IFS= read -r line || [ -n "${line}" ]; do
+        stripped="${line#"${line%%[![:space:]]*}"}"
+        case "${stripped}" in
+            ''|'#'*) continue ;;
+        esac
+        if [ "${family}" = "6" ]; then
+            case "${stripped}" in
+                *:*) ;;
+                *) log_warn "bypass.v6.list: skipping invalid CIDR '${stripped}'"; continue ;;
+            esac
+            case "${stripped}" in
+                *[!0-9a-fA-F:./]*) log_warn "bypass.v6.list: skipping invalid CIDR '${stripped}'"; continue ;;
+            esac
+        else
+            case "${stripped}" in
+                *.*) ;;
+                *) log_warn "bypass.v4.list: skipping invalid CIDR '${stripped}'"; continue ;;
+            esac
+            case "${stripped}" in
+                *[!0-9./]*) log_warn "bypass.v4.list: skipping invalid CIDR '${stripped}'"; continue ;;
+            esac
+        fi
+        printf '%s ' "${stripped}"
+    done <"${file}"
+}
+
 _build_bypass_ip_rules() {
     local suffix="${1}"
     local family="${2}"
     local subnets
+    local user_file
 
     if [ "${family}" = "6" ]; then
         subnets="${BYPASS_IPv6_LIST}"
+        user_file="${CONF_DIR}/bypass.v6.list"
     else
         subnets="${BYPASS_IPv4_LIST}"
+        user_file="${CONF_DIR}/bypass.v4.list"
     fi
+
+    # User entries are additive only; built-ins are never removed
+    # (e.g. dropping 127.0.0.0/8 would break loopback for local services).
+    local user_subnets
+    user_subnets="$(_read_bypass_user_list "${user_file}" "${family}")"
+    [ -n "${user_subnets}" ] && subnets="${subnets} ${user_subnets}"
 
     local chain="BYPASS_IP${suffix}"
 
