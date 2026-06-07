@@ -7,8 +7,11 @@
 # [ Network & Routing Constants ]
 # ==============================================================================
 
-# Chain names for Proxy and Bypass logic
-readonly PROXY_CHAINS="PROXY_PREROUTING PROXY_OUTPUT BYPASS_IP APP_CHAIN ACTION_PROXY_PRE ACTION_PROXY_OUT ACTION_BYPASS BYP_Z0 BYP_Z1 BYP_Z2 BYP_Z3 BYP_Z4 BYP_Z5 BYP_Z6 BYP_Z7 BYP_Z8 BYP_Z9 BYP_Z10 BYP_Z11 BYP_Z12 BYP_Z13 BYP_Z14 BYP_Z15"
+# Chain names for Proxy and Bypass logic. BYP_Z* zone chains are
+# appended dynamically by _orchestrate based on which zones the
+# built-in + user bypass lists actually populate, so empty zones
+# do not consume chain slots or clutter `iptables -L` output.
+readonly PROXY_CHAINS="PROXY_PREROUTING PROXY_OUTPUT BYPASS_IP APP_CHAIN ACTION_PROXY_PRE ACTION_PROXY_OUT ACTION_BYPASS"
 
 # IP Bypasses for Android (Carrier-Safe + RFC 1918/6890/4193)
 readonly BYPASS_IPv4_LIST="0.0.0.0/8 10.0.0.0/8 100.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32"
@@ -64,22 +67,7 @@ _read_bypass_user_list() {
 _build_bypass_ip_rules() {
     local suffix="${1}"
     local family="${2}"
-    local subnets
-    local user_file
-
-    if [ "${family}" = "6" ]; then
-        subnets="${BYPASS_IPv6_LIST}"
-        user_file="${CONF_DIR}/bypass.v6.list"
-    else
-        subnets="${BYPASS_IPv4_LIST}"
-        user_file="${CONF_DIR}/bypass.v4.list"
-    fi
-
-    # User entries are additive only; built-ins are never removed
-    # (e.g. dropping 127.0.0.0/8 would break loopback for local services).
-    local user_subnets
-    user_subnets="$(_read_bypass_user_list "${user_file}" "${family}")"
-    [ -n "${user_subnets}" ] && subnets="${subnets} ${user_subnets}"
+    local subnets="${3}"
 
     local chain="BYPASS_IP${suffix}"
 
@@ -118,6 +106,45 @@ _build_bypass_ip_rules() {
                 printf "-A %s -d %d.0.0.0/4 -j BYP_Z%d%s\n", chain, i * 16, i, suffix
             }
         }
+    }'
+}
+
+# Compute the set of zone indices (0..15) that contain at least one
+# CIDR from the supplied merged bypass list. Returned as a space-
+# separated string suitable for shell iteration. Same zone math as
+# _build_bypass_ip_rules so the two stay in agreement.
+_compute_bypass_zones() {
+    local family="${1}"
+    local subnets="${2}"
+
+    awk -v subnets="${subnets}" -v family="${family}" '
+    BEGIN {
+        n = split(subnets, nets, /[[:space:]]+/)
+        for (j = 1; j <= n; j++) {
+            net = nets[j]
+            if (net == "" || net == "::") continue
+
+            if (family == "6") {
+                clean_ip = tolower(net)
+                sub(/^[:]+/, "", clean_ip)
+                if (clean_ip == "") {
+                    zone = 0
+                } else {
+                    zone = index("0123456789abcdef", substr(clean_ip, 1, 1)) - 1
+                }
+            } else {
+                split(net, o, ".")
+                zone = int(o[1] / 16)
+            }
+
+            if (zone < 0 || zone > 15) zone = 0
+            zones[zone] = 1
+        }
+
+        out = ""
+        for (i = 0; i < 16; i++) if (zones[i]) out = out " " i
+        sub(/^ /, "", out)
+        print out
     }'
 }
 
@@ -396,8 +423,31 @@ _orchestrate() {
         app_mode="0"
     fi
 
-    # Fixed chain list with zone branches.
+    # Resolve the merged bypass list once (built-in + optional user file)
+    # so subsequent steps share one zone-occupancy computation.
+    local user_file subnets
+    if [ "${family}" = "6" ]; then
+        user_file="${CONF_DIR}/bypass.v6.list"
+        subnets="${BYPASS_IPv6_LIST}"
+    else
+        user_file="${CONF_DIR}/bypass.v4.list"
+        subnets="${BYPASS_IPv4_LIST}"
+    fi
+    # User entries are additive only; built-ins are never removed
+    # (e.g. dropping 127.0.0.0/8 would break loopback for local services).
+    local user_subnets
+    user_subnets="$(_read_bypass_user_list "${user_file}" "${family}")"
+    [ -n "${user_subnets}" ] && subnets="${subnets} ${user_subnets}"
+
+    local bypass_zones zone
+    bypass_zones="$(_compute_bypass_zones "${family}" "${subnets}")"
+
+    # Chain list: base + populated BYP_Z* + optional DIVERT. Empty zones
+    # get no chain slot — fewer phantom chains, cleaner iptables -L output.
     local chains="${PROXY_CHAINS}"
+    for zone in ${bypass_zones}; do
+        chains="${chains} BYP_Z${zone}"
+    done
     if [ "${PERFORMANCE_MODE}" = "1" ] && [ "${KFEAT_SOCKET_TCP:-${KFEAT_SOCKET}}" = "1" ] && [ "${KFEAT_MARK}" = "1" ]; then
         chains="${chains} DIVERT"
     fi
@@ -416,7 +466,7 @@ _orchestrate() {
         _build_action_chain "ACTION_PROXY_PRE${suffix}" "${mark}" "${proxy_mark}" 1
         _build_action_chain "ACTION_PROXY_OUT${suffix}" "${mark}" "${proxy_mark}" 0
 
-        _build_bypass_ip_rules "${suffix}" "${family}"
+        _build_bypass_ip_rules "${suffix}" "${family}" "${subnets}"
         [ "${app_mode}" != "0" ] && _build_app_rules "${suffix}" "${app_mode}"
 
         _build_divert_rules "${suffix}" "${mark}" "${proxy_mark}"
