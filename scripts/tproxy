@@ -379,6 +379,14 @@ _rules() {
     }
 
     local err
+    # Parser-only pass before mutating netfilter (AOSP netd IptablesRestoreController precedent).
+    if ! err=$(command "${cmd}" -w "${IPTABLES_WAIT}" --test <"${file}" 2>&1); then
+        log_error "${cmd} --test rejected rule cache"
+        printf '%s\n' "${err}" | while IFS= read -r l; do
+            log_error "  >> ${l}"
+        done
+        return 1
+    fi
     if ! err=$(command "${cmd}" -w "${IPTABLES_WAIT}" --noflush <"${file}" 2>&1); then
         log_error "${cmd} failed"
         printf '%s\n' "${err}" | while IFS= read -r l; do
