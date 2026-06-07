@@ -249,7 +249,6 @@ _build_fast_path_rules() {
 
     [ "${KFEAT_CONNTRACK}" = "1" ] && {
         printf -- '-A PROXY_PREROUTING%s -m conntrack --ctdir REPLY -j ACCEPT\n' "${suffix}"
-        printf -- '-A PROXY_OUTPUT%s -m conntrack --ctdir REPLY -j ACCEPT\n' "${suffix}"
     }
 
     [ "${KFEAT_MARK}" = "1" ] && [ "${KFEAT_CONNTRACK}" = "1" ] && {
