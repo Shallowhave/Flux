@@ -402,6 +402,99 @@ function url_decode(str,   res, i, c, hex, h) {
     return 0
 }
 
+# ==============================================================================
+# [ Differential Update Detection ]
+# REF: sing-box has NO full config hot reload (verified: no `reload` cmd,
+#      no SIGHUP handler, no PUT /config endpoint).
+# REF: sing-box Clash API supports PUT /proxies/:name for node switching only
+#      (https://sing-box.sagernet.org/configuration/experimental/clash-api/).
+# REF: Adding/removing nodes (structural outbound change) requires restart.
+# See analysis Section 3.3.
+# ==============================================================================
+# Usage: _detect_update_type OLD_CONFIG NEW_CONFIG
+# Output (stdout): "full_restart" | "outbounds_only"
+_detect_update_type() {
+    local old_cfg="${1}"
+    local new_cfg="${2}"
+
+    # If either side missing, treat as full restart (safe default).
+    if [ ! -s "${old_cfg}" ] || [ ! -s "${new_cfg}" ]; then
+        echo "full_restart"
+        return 0
+    fi
+
+    [ -x "${JQ_BIN}" ] || {
+        echo "full_restart"
+        return 0
+    }
+
+    # Use temp files instead of process substitution for POSIX sh compatibility
+    # (Android /system/bin/sh is mksh; no <(...) support).
+    local tmp_dir="${WORK_DIR:-${RUN_DIR:-/tmp}}"
+    local old_section new_section
+    old_section=$(mktemp "${tmp_dir}/diff_old.XXXXXX") || {
+        echo "full_restart"
+        return 0
+    }
+    new_section=$(mktemp "${tmp_dir}/diff_new.XXXXXX") || {
+        rm -f "${old_section}"
+        echo "full_restart"
+        return 0
+    }
+
+    _diff_section() {
+        local jq_filter="${1}"
+        "${JQ_BIN}" -S "${jq_filter}" "${old_cfg}" >"${old_section}" 2>/dev/null || return 1
+        "${JQ_BIN}" -S "${jq_filter}" "${new_cfg}" >"${new_section}" 2>/dev/null || return 1
+        cmp -s "${old_section}" "${new_section}"
+    }
+
+    # Compare inbounds (any change requires restart: TPROXY/TUN port, listen, etc.)
+    if ! _diff_section '.inbounds // []'; then
+        rm -f "${old_section}" "${new_section}"
+        echo "full_restart"
+        return 0
+    fi
+
+    # Compare DNS section (server changes require restart)
+    if ! _diff_section '.dns // {}'; then
+        rm -f "${old_section}" "${new_section}"
+        echo "full_restart"
+        return 0
+    fi
+
+    # Compare route rules (rule changes require restart)
+    if ! _diff_section '.route // {}'; then
+        rm -f "${old_section}" "${new_section}"
+        echo "full_restart"
+        return 0
+    fi
+
+    rm -f "${old_section}" "${new_section}"
+
+    # Compare outbound count (structural add/remove requires restart).
+    # Excludes infrastructure types (selector/urltest/direct/block/dns) which
+    # are part of the template, not nodes.
+    local old_count new_count
+    old_count=$("${JQ_BIN}" --argjson infra "${INFRASTRUCTURE_TYPES}" \
+        '[.outbounds[]? | select(.type | IN($infra[]) | not)] | length' \
+        "${old_cfg}" 2>/dev/null || echo 0)
+    new_count=$("${JQ_BIN}" --argjson infra "${INFRASTRUCTURE_TYPES}" \
+        '[.outbounds[]? | select(.type | IN($infra[]) | not)] | length' \
+        "${new_cfg}" 2>/dev/null || echo 0)
+
+    if [ "${old_count}" != "${new_count}" ]; then
+        echo "full_restart"
+        return 0
+    fi
+
+    # Same inbounds/dns/route, same outbound count: only outbound contents differ.
+    # REF: Hot-switching would require Clash API PUT /proxies/:name. For now we
+    # only DETECT this case — the dispatcher consumer (P3 blue-green) will act.
+    echo "outbounds_only"
+    return 0
+}
+
 _validate_and_deploy() {
     local new_cfg="${1}"
     local core_cfg="${2}"
@@ -437,6 +530,11 @@ _validate_and_deploy() {
         return 0
     fi
 
+    # Detect update type BEFORE swapping files (we need both old and new).
+    # REF: Result is consumed by dispatcher in P3 (blue-green); P0 only produces.
+    local update_type="full_restart"
+    update_type=$(_detect_update_type "${core_cfg}" "${new_cfg}") || update_type="full_restart"
+
     # Atomic Deploy with Single Backup
     [ -f "${core_cfg}" ] && {
         cp -p "${core_cfg}" "${core_cfg}.bak"
@@ -448,7 +546,17 @@ _validate_and_deploy() {
         return 1
     fi
     chmod 644 "${core_cfg}"
-    log_info "Deployed: ${count} nodes"
+
+    # Persist detected update type for dispatcher consumption (P3 hook).
+    # REF: sing-box has no full config hot reload (no SIGHUP, no PUT /config).
+    # Only Clash API PUT /proxies/:name is hot. See analysis Section 3.3.
+    if [ -d "${RUN_DIR}" ]; then
+        printf '%s\n' "${update_type}" >"${RUN_DIR}/update_type.tmp" 2>/dev/null &&
+            mv -f "${RUN_DIR}/update_type.tmp" "${RUN_DIR}/update_type" 2>/dev/null || true
+        log_debug "Update type: ${update_type}"
+    fi
+
+    log_info "Deployed: ${count} nodes (type=${update_type})"
     return 0
 }
 

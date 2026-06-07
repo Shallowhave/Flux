@@ -23,6 +23,99 @@ readonly LOG_COMPONENT="Ctl"
 CONFIG_READY=0
 load_config >/dev/null 2>&1 && CONFIG_READY=1 || true
 
+# ==============================================================================
+# [ Validation Commands ]
+# REF: sing-box docs: https://sing-box.sagernet.org/configuration/
+#      sing-box "check" subcommand validates config without running.
+# REF: scripts/config:_validate_singbox_config exists, just expose it via CLI.
+# ==============================================================================
+
+validate_cmd() {
+    local exit_code=0
+
+    # Ensure config module functions are available (idempotent source).
+    # load_config sources CONFIG_SCRIPT on cache-miss; if it took the cache path,
+    # _process_settings is not yet defined. Source explicitly here.
+    if ! command -v _process_settings >/dev/null 2>&1; then
+        [ -f "${CONFIG_SCRIPT}" ] && . "${CONFIG_SCRIPT}"
+    fi
+
+    printf '=== Flux Configuration Validation ===\n\n'
+
+    # 1. Check sing-box binary
+    if [ ! -x "${SING_BOX_BIN}" ]; then
+        printf '[sing-box] binary missing or not executable: %s\n' "${SING_BOX_BIN}"
+        return 1
+    fi
+
+    # 2. Validate sing-box config.json
+    # REF: sing-box check is standard; sing-box has no full config hot reload
+    #      (no SIGHUP handler, no PUT /config). Only Clash API PUT /proxies/:name
+    #      is hot-switchable. See analysis Section 3.3.
+    printf '[sing-box config] '
+    if [ ! -s "${CONFIG_FILE}" ]; then
+        printf 'MISSING (no config.json found)\n'
+        exit_code=1
+    else
+        local check_err
+        if check_err=$("${SING_BOX_BIN}" check -c "${CONFIG_FILE}" -D "${RUN_DIR}" 2>&1); then
+            printf 'OK\n'
+        else
+            printf 'FAILED\n'
+            printf '%s\n' "${check_err}" | while IFS= read -r line; do
+                printf '  >> %s\n' "${line}"
+            done
+            exit_code=1
+        fi
+    fi
+
+    # 3. Validate settings.ini schema
+    # REF: _process_settings is the awk schema-driven validator from scripts/config.
+    printf '[settings schema] '
+    if [ ! -s "${SETTINGS_FILE}" ]; then
+        printf 'MISSING (no settings.ini found)\n'
+        exit_code=1
+    else
+        local settings_tmp
+        settings_tmp=$(mktemp "${RUN_DIR}/validate_settings.XXXXXX") || {
+            printf 'ERROR (cannot create temp file)\n'
+            exit_code=1
+            return "${exit_code}"
+        }
+        if _process_settings >"${settings_tmp}" 2>/dev/null; then
+            printf 'OK\n'
+            rm -f "${settings_tmp}"
+        else
+            printf 'FAILED\n'
+            # Show validation errors (they go to stderr from awk)
+            _process_settings >/dev/null 2>&1 || true
+            rm -f "${settings_tmp}"
+            exit_code=1
+        fi
+    fi
+
+    # 4. Report kernel features (from cache, without rebuilding)
+    printf '\n[kernel features]\n'
+    if [ -s "${CACHE_KERNEL_CAPS_FILE}" ]; then
+        while IFS='=' read -r key val; do
+            case "${key}" in
+            KFEAT_*)
+                if [ "${val}" = "1" ]; then
+                    printf '  %-22s available\n' "${key#KFEAT_}"
+                else
+                    printf '  %-22s absent\n' "${key#KFEAT_}"
+                fi
+                ;;
+            esac
+        done <"${CACHE_KERNEL_CAPS_FILE}"
+    else
+        printf '  (no cached kernel features — run init or rebuild cache first)\n'
+    fi
+
+    printf '\n=== Validation %s ===\n' "$([ "${exit_code}" -eq 0 ] && printf 'PASSED' || printf 'FAILED')"
+    return "${exit_code}"
+}
+
 _print_kv() {
     printf '%-22s %s\n' "${1}:" "${2}"
 }
@@ -193,8 +286,11 @@ main() {
     logs)
         logs_cmd "$@"
         ;;
+    validate)
+        validate_cmd
+        ;;
     *)
-        echo "Usage: $0 {status|start|stop|restart|diagnose|rules-preview|resync|logs [file]}"
+        echo "Usage: $0 {status|start|stop|restart|diagnose|rules-preview|resync|logs [file]|validate}"
         exit 1
         ;;
     esac
