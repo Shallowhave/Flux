@@ -127,6 +127,8 @@ _snapshot_active_runtime() {
         printf 'PREV_NF_CONNTRACK_MAX=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_max "")"
         printf 'PREV_NF_CONNTRACK_UDP_STREAM=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream "")"
         printf 'PREV_NF_CONNTRACK_TCP_CLOSE_WAIT=%s\n' "$(_read_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "")"
+        printf 'PREV_NET_RMEM_MAX=%s\n' "$(_read_file_value /proc/sys/net/core/rmem_max "")"
+        printf 'PREV_NET_WMEM_MAX=%s\n' "$(_read_file_value /proc/sys/net/core/wmem_max "")"
         [ -n "${v4_hash}" ] && printf 'CLEANUP_V4_SHA256=%s\n' "${v4_hash}"
         [ -n "${v6_hash}" ] && printf 'CLEANUP_V6_SHA256=%s\n' "${v6_hash}"
     } >"${tmp}" || return 1
@@ -179,6 +181,7 @@ _snapshot_active_features() {
         [ -n "${CONNTRACK_MAX}" ] && printf '%s\n' "CONNTRACK_MAX=1"
         [ -n "${CONNTRACK_UDP_STREAM_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_UDP_STREAM_TIMEOUT=1"
         [ -n "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT=1"
+        [ -n "${SOCKET_BUFFER_MAX}" ] && printf '%s\n' "SOCKET_BUFFER_MAX=1"
         [ "${VENDOR_FIX_PROFILE}" != "none" ] && printf '%s\n' "VENDOR_FIX_PROFILE=${VENDOR_FIX_PROFILE}"
     } >"${ACTIVE_FEATURES_FILE}.tmp"
     if [ -s "${ACTIVE_FEATURES_FILE}.tmp" ]; then
@@ -333,6 +336,11 @@ _apply_compat_profiles() {
         _write_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" || log_warn "Cannot set nf_conntrack_tcp_timeout_close_wait"
     fi
 
+    if [ -n "${SOCKET_BUFFER_MAX}" ]; then
+        _write_file_value /proc/sys/net/core/rmem_max "${SOCKET_BUFFER_MAX}" || log_warn "Cannot set net.core.rmem_max"
+        _write_file_value /proc/sys/net/core/wmem_max "${SOCKET_BUFFER_MAX}" || log_warn "Cannot set net.core.wmem_max"
+    fi
+
     if [ "${VENDOR_FIX_PROFILE}" != "none" ]; then
         log_warn "Vendor fix profile '${VENDOR_FIX_PROFILE}' is recorded but has no generic safe action"
     fi
@@ -376,6 +384,13 @@ _restore_compat_profiles() {
     if _active_feature_enabled "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT"; then
         value="$(_active_runtime_value PREV_NF_CONNTRACK_TCP_CLOSE_WAIT "")"
         [ -n "${value}" ] && _write_file_value /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait "${value}" || true
+    fi
+
+    if _active_feature_enabled "SOCKET_BUFFER_MAX"; then
+        value="$(_active_runtime_value PREV_NET_RMEM_MAX "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/core/rmem_max "${value}" || true
+        value="$(_active_runtime_value PREV_NET_WMEM_MAX "")"
+        [ -n "${value}" ] && _write_file_value /proc/sys/net/core/wmem_max "${value}" || true
     fi
     return 0
 }
