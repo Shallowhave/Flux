@@ -140,7 +140,7 @@ APP_USER_LIST:user_list:0
 MSS_CLAMP_ENABLE:int:1:0:1
 BLOCK_QUIC:int:0:0:1
 MARK_MASK:mark:0xff
-RULE_BACKEND:enum:iptables_restore:iptables_restore
+RULE_BACKEND:enum:iptables_restore:iptables_restore,nft
 BYPASS_SET_BACKEND:enum:zone:zone,ipset,auto
 PERFORMANCE_MODE:int:0:0:1
 PRIVATE_DNS_GUARD:int:0:0:1

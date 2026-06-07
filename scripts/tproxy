@@ -263,9 +263,25 @@ _restore_compat_profiles() {
 }
 
 # Manage iptables rules (apply/cleanup)
+# REF: RULE_BACKEND="nft" is recognized but the nftables generator is not
+#      yet implemented. When selected, this function logs the request and
+#      falls back to iptables_restore. The fallback is the deliberate
+#      contract for now — see docs/p1b-nftables-backend-design.md for the
+#      migration mapping that will replace this stub.
+# REF: Android 10+ ships nftables (CONFIG_NF_TABLES=y in GKI configs);
+#      KFEAT_NFT is detected at scripts/config:422 but currently unused.
 _rules() {
     local action="${1}"
     local family="${2}"
+
+    if [ "${RULE_BACKEND}" = "nft" ]; then
+        if [ "${KFEAT_NFT:-0}" = "1" ] && command -v nft >/dev/null 2>&1; then
+            log_warn "RULE_BACKEND=nft requested but generator not yet implemented; falling back to iptables_restore"
+        else
+            log_warn "RULE_BACKEND=nft requested but nft/KFEAT_NFT unavailable; falling back to iptables_restore"
+        fi
+    fi
+
     local cmd="iptables-restore"
     [ "${family}" = "6" ] && cmd="ip6tables-restore"
 
