@@ -112,7 +112,6 @@ _snapshot_active_runtime() {
         printf 'BLOCK_QUIC=%s\n' "${BLOCK_QUIC}"
         printf 'PRIVATE_DNS_GUARD=%s\n' "${PRIVATE_DNS_GUARD}"
         printf 'IPV6_FORCE_DISABLE=%s\n' "${IPV6_FORCE_DISABLE}"
-        printf 'VENDOR_FIX_PROFILE=%s\n' "${VENDOR_FIX_PROFILE}"
         printf 'HOTSPOT_FIX=%s\n' "${HOTSPOT_FIX}"
         printf 'PROXY_PORT=%s\n' "${PROXY_PORT}"
         printf 'CORE_USER=%s\n' "${CORE_USER}"
@@ -182,7 +181,6 @@ _snapshot_active_features() {
         [ -n "${CONNTRACK_UDP_STREAM_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_UDP_STREAM_TIMEOUT=1"
         [ -n "${CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT}" ] && printf '%s\n' "CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT=1"
         [ -n "${SOCKET_BUFFER_MAX}" ] && printf '%s\n' "SOCKET_BUFFER_MAX=1"
-        [ "${VENDOR_FIX_PROFILE}" != "none" ] && printf '%s\n' "VENDOR_FIX_PROFILE=${VENDOR_FIX_PROFILE}"
     } >"${ACTIVE_FEATURES_FILE}.tmp"
     if [ -s "${ACTIVE_FEATURES_FILE}.tmp" ]; then
         mv -f "${ACTIVE_FEATURES_FILE}.tmp" "${ACTIVE_FEATURES_FILE}"
@@ -341,9 +339,6 @@ _apply_compat_profiles() {
         _write_file_value /proc/sys/net/core/wmem_max "${SOCKET_BUFFER_MAX}" || log_warn "Cannot set net.core.wmem_max"
     fi
 
-    if [ "${VENDOR_FIX_PROFILE}" != "none" ]; then
-        log_warn "Vendor fix profile '${VENDOR_FIX_PROFILE}' is recorded but has no generic safe action"
-    fi
     return 0
 }
 

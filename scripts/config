@@ -117,7 +117,7 @@ CORE_GROUP:ident:root
 CORE_TIMEOUT:int:5:1:60
 MOBILE_INTERFACE:iface:rmnet_data+
 WIFI_INTERFACE:iface:wlan0
-HOTSPOT_INTERFACE:iface:wlan2
+HOTSPOT_INTERFACE:iface:
 USB_INTERFACE:iface:rndis+
 PROXY_PORT:int:1536:1:65535
 FAKEIP_V4_RANGE:cidr:198.18.0.0/15
@@ -140,13 +140,10 @@ APP_USER_LIST:user_list:0
 MSS_CLAMP_ENABLE:int:1:0:1
 BLOCK_QUIC:int:0:0:1
 MARK_MASK:mark:0xff
-RULE_BACKEND:enum:iptables_restore:iptables_restore,nft
-BYPASS_SET_BACKEND:enum:zone:zone,ipset,auto
 PERFORMANCE_MODE:int:0:0:1
 SOCKET_UDP_PROBE:enum:auto:auto,off,on
 PRIVATE_DNS_GUARD:enum:off:off,strict,auto,0,1
 IPV6_FORCE_DISABLE:int:0:0:1
-VENDOR_FIX_PROFILE:enum:none:none,oneplus
 HOTSPOT_FIX:int:0:0:1
 CONNTRACK_MAX:int::1024:16777216
 CONNTRACK_UDP_STREAM_TIMEOUT:int::1:7200

@@ -24,6 +24,18 @@ readonly BOOT_TIMEOUT=60   # Max wait for system boot (seconds)
 readonly IPTABLES_WAIT=100 # iptables lock wait timeout (centiseconds)
 readonly RESTART_DEBOUNCE_SEC=10
 
+# Internal defaults for knobs that were once user-tunable but only
+# have one production code path today. Demoted from settings.ini
+# (P5-A2) to stop exposing values that are not actually selectable.
+# Plain assignments (not readonly) so legacy cache files that still
+# carry these names can resource without "readonly variable" errors.
+# REF: scripts/tproxy:_rules has a logged-fallback branch for "nft"
+#      that is dead until docs/p1b-nftables-backend-design.md ships
+#      its generator. Keeping the variable here is the guard against
+#      future config drift; the branch becomes live again when set.
+RULE_BACKEND="iptables_restore"
+BYPASS_SET_BACKEND="zone"
+
 # ==============================================================================
 # [ Directory Structure ]
 # ==============================================================================

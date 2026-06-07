@@ -260,12 +260,9 @@ graph TD
 | `MSS_CLAMP_ENABLE`| 启用 TCP MSS 钳制 | `1` |
 | `BLOCK_QUIC` | 全局阻断 UDP/443 QUIC | `0` |
 | `MARK_MASK` | Flux connmark 掩码 | `0xff` |
-| `RULE_BACKEND` | 规则后端（生产默认仅 `iptables_restore`） | `iptables_restore` |
-| `BYPASS_SET_BACKEND` | 绕过集合后端（`zone`, `ipset`, `auto`） | `zone` |
 | `PERFORMANCE_MODE` | 内核支持时启用 socket/conntrack 快路径 | `0` |
 | `PRIVATE_DNS_GUARD` | 预留兼容 profile，默认关闭 | `0` |
 | `IPV6_FORCE_DISABLE` | 预留兼容 profile，默认关闭 | `0` |
-| `VENDOR_FIX_PROFILE` | 预留厂商 profile（`none`, `oneplus`） | `none` |
 | `HOTSPOT_FIX` | 预留热点兼容 profile | `0` |
 | `EXCLUDE_INTERFACES`| 显式忽略的接口列表 (OUTPUT) | (空) |
 

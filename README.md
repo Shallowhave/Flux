@@ -269,12 +269,9 @@ Main configuration file: `/data/adb/flux/conf/settings.ini`. Changes take effect
 | `MSS_CLAMP_ENABLE`| Enable TCP MSS Clamping | `1` |
 | `BLOCK_QUIC` | Block UDP/443 QUIC globally | `0` |
 | `MARK_MASK` | Connmark mask used by Flux marks | `0xff` |
-| `RULE_BACKEND` | Rule backend (`iptables_restore` only for production) | `iptables_restore` |
-| `BYPASS_SET_BACKEND` | Bypass set backend (`zone`, `ipset`, `auto`) | `zone` |
 | `PERFORMANCE_MODE` | Enable optional socket/conntrack fast path when supported | `0` |
 | `PRIVATE_DNS_GUARD` | Reserved compatibility profile, disabled by default | `0` |
 | `IPV6_FORCE_DISABLE` | Reserved compatibility profile, disabled by default | `0` |
-| `VENDOR_FIX_PROFILE` | Reserved vendor profile (`none`, `oneplus`) | `none` |
 | `HOTSPOT_FIX` | Reserved hotspot compatibility profile | `0` |
 | `EXCLUDE_INTERFACES`| List of interfaces to explicitly ignore (OUTPUT) | (empty) |
 
