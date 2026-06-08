@@ -89,23 +89,23 @@ graph TD
     Pre([PREROUTING<br/>外部流量]) --> Fast
     Out([OUTPUT<br/>本地应用]) --> Fast
 
-    subgraph Chain ["mangle"]
-        Fast{快路径<br/>(可选)}
+    subgraph Chain [mangle]
+        Fast{"快路径<br/>可选"}
 
-        Fast -->|connmark = PROXY| Recover[恢复 mark<br/>TPROXY]
-        Fast -->|connmark = BYPASS| Accepted[放行]
-        Fast -- "新连接" --> IPCheck
+        Fast -->|"connmark = PROXY"| Recover["恢复 mark<br/>TPROXY"]
+        Fast -->|"connmark = BYPASS"| Accepted[放行]
+        Fast -->|"新连接"| IPCheck
 
-        IPCheck{IP 在绕过列表?<br/>16 区跳转树}
-        IPCheck -->|私有 / RFC1918 / LAN| SetBypass[标记 BYPASS]
+        IPCheck{"IP 在绕过列表?<br/>16 区跳转树"}
+        IPCheck -->|"私有 / RFC1918 / LAN"| SetBypass[标记 BYPASS]
         IPCheck -->|公网| IfCheck
 
-        IfCheck{接口已启用?}
+        IfCheck{"接口已启用?"}
         IfCheck -->|否| SetBypass
         IfCheck -->|是| AppCheck
 
-        AppCheck{应用过滤<br/>UID 匹配?}
-        AppCheck -->|代理| SetProxy[标记 PROXY<br/>TPROXY]
+        AppCheck{"应用过滤<br/>UID 匹配?"}
+        AppCheck -->|代理| SetProxy["标记 PROXY<br/>TPROXY"]
         AppCheck -->|绕过| SetBypass
     end
 
@@ -114,7 +114,7 @@ graph TD
     Accepted --> Direct
     SetBypass --> Direct
 
-    subgraph Exit ["出口"]
+    subgraph Exit [出口]
         SingBox([sing-box])
         Direct([内核直连])
     end

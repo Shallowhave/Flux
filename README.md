@@ -89,23 +89,23 @@ graph TD
     Pre([PREROUTING<br/>external traffic]) --> Fast
     Out([OUTPUT<br/>local apps]) --> Fast
 
-    subgraph Chain ["mangle"]
-        Fast{fast path<br/>(opt-in)}
+    subgraph Chain [mangle]
+        Fast{"fast path<br/>opt-in"}
 
-        Fast -->|connmark = PROXY| Recover[restore mark<br/>TPROXY]
-        Fast -->|connmark = BYPASS| Accepted[accept]
-        Fast -- "new conn" --> IPCheck
+        Fast -->|"connmark = PROXY"| Recover["restore mark<br/>TPROXY"]
+        Fast -->|"connmark = BYPASS"| Accepted[accept]
+        Fast -->|"new conn"| IPCheck
 
-        IPCheck{IP in bypass list?<br/>16-zone jump tree}
-        IPCheck -->|private / RFC1918 / LAN| SetBypass[mark BYPASS]
+        IPCheck{"IP in bypass list?<br/>16-zone jump tree"}
+        IPCheck -->|"private / RFC1918 / LAN"| SetBypass[mark BYPASS]
         IPCheck -->|public| IfCheck
 
-        IfCheck{interface enabled?}
+        IfCheck{"interface enabled?"}
         IfCheck -->|no| SetBypass
         IfCheck -->|yes| AppCheck
 
-        AppCheck{app filter<br/>UID match?}
-        AppCheck -->|proxy| SetProxy[mark PROXY<br/>TPROXY]
+        AppCheck{"app filter<br/>UID match?"}
+        AppCheck -->|proxy| SetProxy["mark PROXY<br/>TPROXY"]
         AppCheck -->|bypass| SetBypass
     end
 
@@ -114,7 +114,7 @@ graph TD
     Accepted --> Direct
     SetBypass --> Direct
 
-    subgraph Exit ["egress"]
+    subgraph Exit [egress]
         SingBox([sing-box])
         Direct([kernel direct])
     end
