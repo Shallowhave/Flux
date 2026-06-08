@@ -36,6 +36,7 @@ unset _self
 readonly ADDRSYNCD_DIR="${REPO_ROOT}/addrsyncd"
 readonly ADDRSYNCD_TARGET="aarch64-linux-android"
 readonly STAGE_DIR_DEFAULT="${REPO_ROOT}/dist/stage"
+readonly CACHE_DIR="${REPO_ROOT}/dist/cache"
 readonly OUT_DIR_DEFAULT="${REPO_ROOT}/dist"
 
 # Extracted from module.prop so version is single-sourced.
@@ -65,9 +66,9 @@ Usage: $(basename "$0") [options]
   --jq-version VER        Pin jq version (e.g. jq-1.7.1). Default: latest.
   --no-addrsyncd-build    Reuse \${addrsyncd}/target/${ADDRSYNCD_TARGET}/release/addrsyncd
                           instead of running cargo build.
-  --no-fetch              Reuse already-staged bin/sing-box and bin/jq under
-                          dist/stage/bin instead of downloading. Useful for
-                          offline builds.
+  --no-fetch              Reuse already-downloaded bin/sing-box and bin/jq
+                          under dist/cache/ instead of going to the network.
+                          Useful for offline / air-gapped builds.
   --lite                  Produce a lite zip without bin/. User supplies the
                           binaries (per conf/manifest.json "lite" profile).
   --out-dir DIR           Output directory. Default: ${OUT_DIR_DEFAULT}.
@@ -117,9 +118,15 @@ require() {
 }
 
 log "Checking host toolchain"
-for t in curl jq sha256sum tar unzip zip awk sed; do
+# jq is only needed for GitHub-API JSON parsing during the fetch step; the
+# stage tree itself is built without it. Defer the jq check to the fetch
+# branch so --no-fetch and --lite builds work on hosts without jq.
+for t in curl sha256sum tar unzip zip awk sed; do
     require "$t"
 done
+if [ "${LITE_PROFILE}" -eq 0 ] && [ "${SKIP_FETCH}" -eq 0 ]; then
+    require jq
+fi
 if [ "${SKIP_ADDRSYNCD_BUILD}" -eq 0 ] && [ "${LITE_PROFILE}" -eq 0 ]; then
     require cargo
     require rustup
@@ -190,7 +197,11 @@ if [ "${LITE_PROFILE}" -eq 0 ]; then
         ok "addrsyncd compiled"
     else
         note "addrsyncd build skipped per --no-addrsyncd-build"
-        [ -x "${ADDRSYNCD_BIN_SRC}" ] || die "no prebuilt addrsyncd at ${ADDRSYNCD_BIN_SRC}"
+        # Exec bit can't be preserved on Windows-via-Git-Bash NTFS, so
+        # gate on "size > 0" and rely on the ELF-magic check at the end
+        # of staging to catch a non-binary. install -m 0755 sets the
+        # zip central-directory mode regardless of the source mode.
+        [ -s "${ADDRSYNCD_BIN_SRC}" ] || die "no prebuilt addrsyncd at ${ADDRSYNCD_BIN_SRC}"
     fi
 fi
 
@@ -340,8 +351,9 @@ if [ "${LITE_PROFILE}" -eq 0 ]; then
     else
         note "binary fetch skipped per --no-fetch"
         for f in sing-box jq; do
-            [ -x "${STAGE_DIR}/bin/${f}" ] \
-                || die "--no-fetch requires bin/${f} prestaged in ${STAGE_DIR}/bin/"
+            [ -s "${CACHE_DIR}/${f}" ] \
+                || die "--no-fetch requires ${CACHE_DIR}/${f} (prestaged binary)"
+            install -m 0755 "${CACHE_DIR}/${f}" "${STAGE_DIR}/bin/${f}"
         done
         SINGBOX_BIN_SHA="$(sha "${STAGE_DIR}/bin/sing-box")"
         JQ_BIN_SHA="$(sha "${STAGE_DIR}/bin/jq")"

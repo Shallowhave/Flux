@@ -18,7 +18,7 @@ make package-lite
 # Pin specific upstream versions
 bash tools/package.sh --singbox-version v1.10.4 --jq-version jq-1.7.1
 
-# Re-use already-downloaded binaries
+# Re-use already-downloaded binaries (place sing-box + jq under dist/cache/)
 bash tools/package.sh --no-fetch --no-addrsyncd-build
 ```
 
