@@ -2,6 +2,46 @@
 
 All notable changes to the Flux project will be documented in this file.
 
+## [v1.5.0] - 2026-06-08
+
+### 🛡️ Rule-apply safety (P6-A)
+- `scripts/tproxy:_rules` now runs `iptables-restore --test` on the rule cache before the `--noflush` apply. A malformed cache is rejected before any netfilter mutation, preventing the previous half-applied-state failure mode. Mirrors AOSP `system/netd/IptablesRestoreController.cpp`. Applies to both apply and cleanup paths (one chokepoint).
+
+### 🧰 User-extensible bypass list (P6-D)
+- New optional files `conf/bypass.v4.list` and `conf/bypass.v6.list` (one CIDR per line; `#` comments; blank lines ignored). Entries are **additively** merged with the built-in carrier-safe defaults — built-ins cannot be removed (loopback safety). Malformed lines emit a `log_warn` and the apply continues. Files are not shipped in the module zip and survive updates by absence.
+
+### 🧪 Opt-in resource tuning (P6-B / P6-C / P5-C2)
+- `CONNTRACK_MAX`, `CONNTRACK_UDP_STREAM_TIMEOUT`, `CONNTRACK_TCP_CLOSE_WAIT_TIMEOUT` — write to `/proc/sys/net/netfilter/*` for high-flow workloads (WebRTC, P2P).
+- `SOCKET_BUFFER_MAX` — symmetric `net.core.{rmem,wmem}_max` ceiling for sing-box's UDP TPROXY inbound on heavy QUIC traffic.
+- `LOCALNET_FIX` — opt-in `route_localnet=1` for niche localhost-DNAT use.
+- All four default empty/0; defaults preserve byte-identical behavior. All four are snapshot+restored on dispatcher stop using the existing `IPV6_FORCE_DISABLE`/`HOTSPOT_FIX` plumbing.
+
+### 🔧 TPROXY correctness (P5-C2)
+- `net.ipv4.conf.all.rp_filter` automatically set to `2` (loose mode) when `PROXY_MODE=tproxy`, snapshot+restored on stop. Fixes the "first packet vanishes" symptom on multi-interface devices where strict reverse-path filtering drops asymmetric TPROXY-redirected packets. Per kernel `ip-sysctl.rst` and mihomo / box4magisk precedent.
+
+### ⚡ Chain shape (P5-B3, P5-B4)
+- Dropped the no-op `-A PROXY_OUTPUT -m conntrack --ctdir REPLY -j ACCEPT` line — locally-originated packets on OUTPUT never carry REPLY direction on Android. Saves one rule traversal per outbound packet per family. mihomo, box4magisk, AndroidTProxyShell precedent.
+- `BYP_Z*` zone chains are now created conditionally based on the merged bypass list. With default settings, 7 / 16 IPv4 chains and 11 / 16 IPv6 chains are no longer emitted.
+
+### 🐛 IPTABLES_WAIT off-by-20× (P5-C1)
+- `scripts/lib:IPTABLES_WAIT` was `100` with a "centiseconds" comment, but iptables 1.6+ parses `-w` as **seconds**. On lock contention, stages blocked for 100 s. New value `5` matches AOSP `IptablesRestoreController.cpp`.
+
+### 🧹 Settings cleanup (P5-A)
+- Removed `VENDOR_FIX_PROFILE` — recorded but had no behavioural code path.
+- Demoted `RULE_BACKEND` and `BYPASS_SET_BACKEND` to internal `scripts/lib` defaults — neither had a working second value to choose.
+- Comment polish: `CORE_USER`/`CORE_GROUP` loopback-rule warning, `IPV6_FORCE_DISABLE` system-wide warning, `HOTSPOT_INTERFACE` empty default with example, corrected the wrong "deprecated" comment on `PROXY_IPV6`, regrouped `TUN_*` knobs under an explicit "Only used when PROXY_MODE=tun" sub-header.
+
+### 📦 Release process
+- `tools/package.sh` — single-command Magisk module builder. Compiles addrsyncd via `cargo`, fetches the latest sing-box (android-arm64) and jq (linux-arm64 static, bionic-compatible) from GitHub releases, verifies SHA-256 against upstream sums, stages the on-device tree, and emits `dist/flux-<version>.zip`.
+- `Makefile` — `make package` / `make package-lite` wrappers.
+- `tools/README.md` — host prereqs, version pinning flags, verification details.
+- The shipped zip carries `conf/manifest.json` populated with resolved upstream versions and binary SHA-256s.
+
+### 📚 Documentation
+- `docs/p5-config-and-chain-cleanup.md` — design for the chain/sysctl work above.
+- `docs/p6-rule-safety-resource-tuning-and-list-externalization.md` — design for the safety/tuning/extensibility work above.
+- `docs/roadmap-status.md` — explicit SHIPPED / DEFERRED / REJECTED / NOT-PURSUED status for every proposal in `flux-architecture-analysis.md`.
+
 ## [v1.4.0] - 2026-02-23
 
 ### ⚠️ Correctness & Stability
