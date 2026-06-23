@@ -489,7 +489,6 @@ build_config() {
     local tmp_settings
     tmp_settings=$(mktemp "${RUN_DIR:-/tmp}/cfgsettings.XXXXXX") || return 1
 
-    _extract_json_config || return 1
     if ! _process_settings >"${tmp_settings}"; then
         rm -f "${tmp_settings}"
         return 1
@@ -497,9 +496,12 @@ build_config() {
     set -a
     . "${tmp_settings}"
     set +a
-    _apply_proxy_mode_config || return 1
-    _extract_json_config || return 1
-    _validate_singbox_config || return 1
+    if [ -s "${CONFIG_FILE}" ]; then
+        _extract_json_config || return 1
+        _apply_proxy_mode_config || return 1
+        _extract_json_config || return 1
+        _validate_singbox_config || return 1
+    fi
     cat "${tmp_settings}"
     rm -f "${tmp_settings}"
     _detect_kernel || return 1
