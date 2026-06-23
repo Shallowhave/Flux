@@ -138,7 +138,7 @@ _transform_nodes() {
             # --- Phase C: Final Assembly ---
             $tpl | .outbounds |= (
                 map(
-                    if (.type == "selector" and (.outbounds | length) == 0) then
+                    if ((.type == "selector" or .type == "urltest") and (.outbounds | length) == 0) then
                         if $groups[.tag] then
                             .outbounds = $groups[.tag]
                         elif (.tag | IN("PROXY", "GLOBAL", "AUTO")) then
