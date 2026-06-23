@@ -303,6 +303,7 @@ main() {
     trap "rm -rf \"${tmp_backup}\"; rm -rf \"${FLUX_DIR}/tmp\" 2>/dev/null" EXIT INT TERM
 
     local has_settings=false has_config=false has_template=false has_addrsyncd=false
+    local preserve_config="false"
 
     if [ -d "${FLUX_DIR}" ]; then
         ui_print "- Backing up configuration files..."
@@ -349,38 +350,40 @@ main() {
     ui_print " "
     ui_print "=== Configuration ==="
 
+    if [ "${has_settings}" = "true" ] || [ "${has_config}" = "true" ] || [ "${has_template}" = "true" ] || [ "${has_addrsyncd}" = "true" ]; then
+        if _choose_action "Keep existing configuration?" "true"; then
+            preserve_config="true"
+        fi
+    fi
+
     # 4.1 settings.ini - Auto migrate
-    if [ "${has_settings}" = "true" ]; then
+    if [ "${preserve_config}" = "true" ] && [ "${has_settings}" = "true" ]; then
         ui_print "- Migrating settings.ini..."
         _migrate_settings "${tmp_backup}/settings.ini" "${CONF_DIR}/settings.ini"
     else
         ui_print "- Using default settings.ini"
     fi
 
-    # 4.2 config.json - Auto restore last known-good generated config
-    if [ "${has_config}" = "true" ]; then
+    # 4.2 config.json - Restore last known-good generated config when preserving config
+    if [ "${preserve_config}" = "true" ] && [ "${has_config}" = "true" ]; then
         cp -f "${tmp_backup}/config.json" "${CONF_DIR}/config.json"
         ui_print "- Restored config.json"
     fi
 
-    # 4.3 template.json - User choice
-    if [ "${has_template}" = "true" ]; then
-        if _choose_action "Keep [template.json]?" "true"; then
-            cp -f "${tmp_backup}/template.json" "${CONF_DIR}/template.json"
-            ui_print "  > template.json: restored"
-        else
-            ui_print "  > template.json: reset to default"
-        fi
+    # 4.3 template.json
+    if [ "${preserve_config}" = "true" ] && [ "${has_template}" = "true" ]; then
+        cp -f "${tmp_backup}/template.json" "${CONF_DIR}/template.json"
+        ui_print "- Restored template.json"
+    elif [ "${has_template}" = "true" ]; then
+        ui_print "- Using default template.json"
     fi
 
-    # 4.4 addrsyncd.toml - User choice
-    if [ "${has_addrsyncd}" = "true" ]; then
-        if _choose_action "Keep [addrsyncd.toml]?" "true"; then
-            cp -f "${tmp_backup}/addrsyncd.toml" "${CONF_DIR}/addrsyncd.toml"
-            ui_print "  > addrsyncd.toml: restored"
-        else
-            ui_print "  > addrsyncd.toml: reset to default"
-        fi
+    # 4.4 addrsyncd.toml
+    if [ "${preserve_config}" = "true" ] && [ "${has_addrsyncd}" = "true" ]; then
+        cp -f "${tmp_backup}/addrsyncd.toml" "${CONF_DIR}/addrsyncd.toml"
+        ui_print "- Restored addrsyncd.toml"
+    elif [ "${has_addrsyncd}" = "true" ]; then
+        ui_print "- Using default addrsyncd.toml"
     fi
 
     # 5. Set Permissions
