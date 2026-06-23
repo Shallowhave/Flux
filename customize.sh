@@ -302,7 +302,7 @@ main() {
     # Ensure cleanup on exit (Use double quotes to expand tmp_backup immediately)
     trap "rm -rf \"${tmp_backup}\"; rm -rf \"${FLUX_DIR}/tmp\" 2>/dev/null" EXIT INT TERM
 
-    local has_settings=false has_template=false has_addrsyncd=false
+    local has_settings=false has_config=false has_template=false has_addrsyncd=false
 
     if [ -d "${FLUX_DIR}" ]; then
         ui_print "- Backing up configuration files..."
@@ -310,6 +310,11 @@ main() {
         if [ -f "${CONF_DIR}/settings.ini" ]; then
             cp -f "${CONF_DIR}/settings.ini" "${tmp_backup}/settings.ini"
             has_settings=true
+        fi
+        # Backup generated config.json to preserve last known-good runtime config on upgrade.
+        if [ -f "${CONF_DIR}/config.json" ]; then
+            cp -f "${CONF_DIR}/config.json" "${tmp_backup}/config.json"
+            has_config=true
         fi
         # Backup template.json template (user choice)
         if [ -f "${CONF_DIR}/template.json" ]; then
@@ -352,7 +357,13 @@ main() {
         ui_print "- Using default settings.ini"
     fi
 
-    # 4.2 template.json - User choice
+    # 4.2 config.json - Auto restore last known-good generated config
+    if [ "${has_config}" = "true" ]; then
+        cp -f "${tmp_backup}/config.json" "${CONF_DIR}/config.json"
+        ui_print "- Restored config.json"
+    fi
+
+    # 4.3 template.json - User choice
     if [ "${has_template}" = "true" ]; then
         if _choose_action "Keep [template.json]?" "true"; then
             cp -f "${tmp_backup}/template.json" "${CONF_DIR}/template.json"
@@ -362,7 +373,7 @@ main() {
         fi
     fi
 
-    # 4.3 addrsyncd.toml - User choice
+    # 4.4 addrsyncd.toml - User choice
     if [ "${has_addrsyncd}" = "true" ]; then
         if _choose_action "Keep [addrsyncd.toml]?" "true"; then
             cp -f "${tmp_backup}/addrsyncd.toml" "${CONF_DIR}/addrsyncd.toml"
