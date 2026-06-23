@@ -23,7 +23,7 @@
     {
       "name": "addrsyncd",
       "path": "bin/addrsyncd",
-      "source": "D:/Github/addrsyncd",
+      "source": "https://github.com/Chth1z/addrsyncd",
       "version": "",
       "target": "android",
       "sha256": ""

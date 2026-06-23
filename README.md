@@ -65,6 +65,14 @@ Independent proxy switches for each network interface:
 4. Configure your subscription URL in `/data/adb/flux/conf/settings.ini`
 5. Reboot to start
 
+### Release Packaging
+
+- The source repository does not include `bin/` release binaries.
+- Official release ZIPs are assembled by GitHub Actions on pushed version tags.
+- The release workflow downloads the latest Android `sing-box` binary.
+- The release workflow builds Android binaries for `jq` and `addrsyncd`.
+- GitHub Releases contain the complete installable ZIP with all required binaries injected at packaging time.
+
 ---
 
 ## Workflow Visualization
@@ -201,6 +209,8 @@ All module files are located at `/data/adb/flux/`:
 ├── module.prop               # Module metadata
 └── disable                   # (Created when module is disabled)
 ```
+
+Note: `bin/` is expected inside the packaged release ZIP and on-device module directory, but it is intentionally not committed to the source repository.
 
 ---
 

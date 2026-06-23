@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Install runner dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            curl \
+            jq \
+            libtool \
+            make \
+            unzip \
+            zip
+
+      - name: Read module metadata
+        id: module
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(awk -F= '$1=="version"{print $2}' module.prop)"
+          version_code="$(awk -F= '$1=="versionCode"{print $2}' module.prop)"
+          module_id="$(awk -F= '$1=="id"{print $2}' module.prop)"
+          module_name="$(awk -F= '$1=="name"{print $2}' module.prop)"
+          tag_name="${GITHUB_REF_NAME}"
+
+          [ -n "${version}" ] || { echo "module.prop missing version" >&2; exit 1; }
+          [ -n "${version_code}" ] || { echo "module.prop missing versionCode" >&2; exit 1; }
+          [ -n "${module_id}" ] || { echo "module.prop missing id" >&2; exit 1; }
+          [ -n "${module_name}" ] || { echo "module.prop missing name" >&2; exit 1; }
+
+          if [ "${tag_name}" != "${version}" ]; then
+            echo "Tag ${tag_name} does not match module.prop version ${version}" >&2
+            exit 1
+          fi
+
+          jq_tag="$(curl -fsSL https://api.github.com/repos/jqlang/jq/releases/latest | jq -r '.tag_name')"
+          [ -n "${jq_tag}" ] && [ "${jq_tag}" != "null" ] || { echo "Unable to resolve latest jq tag" >&2; exit 1; }
+
+          {
+            echo "version=${version}"
+            echo "version_code=${version_code}"
+            echo "module_id=${module_id}"
+            echo "module_name=${module_name}"
+            echo "jq_tag=${jq_tag}"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Fetch sing-box binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .release/bin .release/meta
+          sh scripts/fetch-release-binaries.sh \
+            --output-dir .release/bin \
+            --metadata-file .release/meta/binaries.env
+
+      - name: Build jq and addrsyncd Android binaries
+        shell: bash
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          BUILD_JOBS: "4"
+        run: |
+          set -euo pipefail
+          sh scripts/build-third-party-android.sh \
+            --output-dir .release/bin \
+            --metadata-file .release/meta/binaries.env \
+            --jq-tag "${{ steps.module.outputs.jq_tag }}" \
+            --addrsyncd-dir addrsyncd
+
+      - name: Package release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .release/out
+          sh scripts/package-release.sh \
+            --repo-root . \
+            --bin-dir .release/bin \
+            --metadata-file .release/meta/binaries.env \
+            --output-dir .release/out
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          addrsyncd_commit="$(git -C addrsyncd rev-parse HEAD)"
+          # shellcheck disable=SC1091
+          . .release/meta/binaries.env
+          printf '%s\n' \
+            "Flux version: ${{ steps.module.outputs.version }}" \
+            "VersionCode: ${{ steps.module.outputs.version_code }}" \
+            "Tag: ${GITHUB_REF_NAME}" \
+            "sing-box: ${SING_BOX_VERSION:-unknown}" \
+            "jq: ${JQ_VERSION:-${{ steps.module.outputs.jq_tag }}}" \
+            "addrsyncd commit: ${ADDRSYNCD_VERSION:-${addrsyncd_commit}}" \
+            > .release/meta/release-notes.txt
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux-${{ steps.module.outputs.version }}
+          path: .release/out/*.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: .release/out/*.zip
+          body_path: .release/meta/release-notes.txt

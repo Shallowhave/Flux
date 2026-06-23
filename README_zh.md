@@ -53,6 +53,14 @@
 4. 在 `/data/adb/flux/conf/settings.ini` 中配置您的订阅链接
 5. 重启以启动
 
+### 发布打包说明
+
+- 源码仓库不包含 `bin/` 发布二进制文件。
+- 正式发布 ZIP 由 GitHub Actions 在推送版本 tag 时自动组装。
+- 发布工作流会下载最新的 Android `sing-box` 二进制。
+- 发布工作流会为 `jq` 和 `addrsyncd` 构建 Android 二进制。
+- GitHub Releases 中的 ZIP 是可直接安装的完整包，所需二进制会在打包时注入。
+
 ---
 
 ## 工作流程可视化
@@ -192,6 +200,8 @@ graph TD
 ├── module.prop               # 模块元数据
 └── disable                   # (模块被禁用时创建)
 ```
+
+注意：`bin/` 会出现在发布 ZIP 和设备上的模块目录中，但它是有意不提交进源码仓库的。
 
 ---
 
