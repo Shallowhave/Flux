@@ -4,7 +4,7 @@ set -eu
 [ -n "${BASH_VERSION:-}" ] && set -o pipefail
 
 readonly JQ_REPO="jqlang/jq"
-readonly JQ_SOURCE_URL_BASE="https://github.com/jqlang/jq/archive/refs/tags"
+readonly JQ_RELEASE_URL_BASE="https://github.com/jqlang/jq/releases/download"
 readonly ADDRSYNCD_TARGET="aarch64-linux-android"
 
 usage() {
@@ -129,11 +129,11 @@ build_jq_android() {
     setup_android_toolchain
 
     JQ_WORK_DIR="${WORK_DIR}/jq"
-    JQ_ARCHIVE="${JQ_WORK_DIR}/jq-${jq_tag}.tar.gz"
+    JQ_ARCHIVE="${JQ_WORK_DIR}/${jq_tag}.tar.gz"
     JQ_SOURCE_ROOT="${JQ_WORK_DIR}/src"
     mkdir -p "${JQ_WORK_DIR}"
 
-    download_file "${JQ_SOURCE_URL_BASE}/${jq_tag}.tar.gz" "${JQ_ARCHIVE}" || fail "Failed to download jq source tag ${jq_tag}"
+    download_file "${JQ_RELEASE_URL_BASE}/${jq_tag}/${jq_tag}.tar.gz" "${JQ_ARCHIVE}" || fail "Failed to download jq release tarball ${jq_tag}"
     extract_tarball "${JQ_ARCHIVE}" "${JQ_SOURCE_ROOT}"
 
     JQ_SOURCE_DIR="$(first_subdir "${JQ_SOURCE_ROOT}")"
