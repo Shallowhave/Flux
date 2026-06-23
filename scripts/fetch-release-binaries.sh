@@ -36,7 +36,7 @@ github_latest_release_json() {
 select_unique_asset() {
     json_file="$1"
     jq_filter="$2"
-    asset_name
+    asset_name=""
     asset_name="$(jq -r "${jq_filter}" "${json_file}")" || return 1
 
     [ -n "${asset_name}" ] || fail "No matching asset found in ${json_file}"
