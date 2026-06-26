@@ -72,6 +72,7 @@ readonly ADDRSYNCD_PID_FILE="${RUN_DIR}/addrsyncd.pid"
 # [ Internal Files ]
 # ==============================================================================
 readonly DISPATCH_LOCK_DIR="${RUN_DIR}/dispatcher.lock"
+readonly DISPATCH_PENDING_FILE="${RUN_DIR}/dispatcher.pending"
 readonly RESTART_STAMP_FILE="${RUN_DIR}/restart.stamp"
 readonly BOOT_TRIGGER="${MAGISK_MOD_DIR}/boot_trigger"
 readonly EVENT_CACHE_OK="${CACHE_DIR}/cache_valid"

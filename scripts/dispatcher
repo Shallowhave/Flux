@@ -203,11 +203,51 @@ _dispatch_event() {
     return 0
 }
 
+_queue_pending_event() {
+    local event_name="${1}"
+    local event_type="${2}"
+    atomic_write "${DISPATCH_PENDING_FILE}" printf '%s\n%s\n' "${event_type}" "${event_name}"
+}
+
+_drain_pending_events() {
+    local spins=0
+    local pending_type pending_name
+
+    while [ -f "${DISPATCH_PENDING_FILE}" ] && [ "${spins}" -lt 8 ]; do
+        pending_type=""
+        pending_name=""
+
+        {
+            IFS= read -r pending_type || exit 1
+            IFS= read -r pending_name || true
+        } <"${DISPATCH_PENDING_FILE}" || break
+        rm -f "${DISPATCH_PENDING_FILE}"
+
+        [ -n "${pending_type}" ] || break
+        [ -n "${pending_name}" ] || pending_name="manual"
+
+        log_debug "Replaying pending event: ${pending_name}:${pending_type}"
+        _dispatch_event "${pending_name}" "${pending_type}" || return 1
+
+        spins=$((spins + 1))
+    done
+
+    if [ -f "${DISPATCH_PENDING_FILE}" ]; then
+        log_warn "Pending event queue still busy after replay limit"
+    fi
+    return 0
+}
+
 _with_dispatch_lock() {
     [ -d "${RUN_DIR}" ] || mkdir -p "${RUN_DIR}" 2>/dev/null || true
 
     if ! mkdir "${DISPATCH_LOCK_DIR}" 2>/dev/null; then
-        log_debug "Dispatcher busy, skip overlapping event"
+        if [ "$#" -ge 3 ] && [ "${1}" = "_dispatch_event" ]; then
+            _queue_pending_event "${2}" "${3}" || true
+            log_debug "Dispatcher busy, queued overlapping event"
+        else
+            log_debug "Dispatcher busy, skip overlapping command"
+        fi
         return 0
     fi
 
@@ -215,6 +255,7 @@ _with_dispatch_lock() {
     trap 'rmdir "${DISPATCH_LOCK_DIR}" 2>/dev/null || true' EXIT INT TERM
 
     "$@" || rc=$?
+    [ "${rc}" -eq 0 ] && _drain_pending_events || true
 
     rmdir "${DISPATCH_LOCK_DIR}" 2>/dev/null || true
     trap - EXIT INT TERM

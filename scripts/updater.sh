@@ -95,6 +95,9 @@ readonly INFRASTRUCTURE_TYPES='["selector","urltest","direct","block","dns"]'
 _transform_nodes() {
     local input="${1}"
     local output="${2}"
+    local unsupported_file="${WORK_DIR}/unsupported_protocols"
+
+    : >"${unsupported_file}"
 
     run_pipeline() {
         # shellcheck disable=SC2016
@@ -158,37 +161,58 @@ _transform_nodes() {
             return 1
         }
     else
-        log_debug "Parsing URI list (Fast Mode)..."
+        log_debug "Parsing URI list (Safe Mode)..."
 
-        # Use awk to parse URIs in bulk -> jq aggregation -> jq pipeline
-        awk '
+        # Use awk to parse URI subscriptions in bulk -> jq aggregation -> jq pipeline.
+        # Keep support aligned with sing-box outbound structures, instead of emitting lossy placeholders.
+        awk -v unsupported_file="${unsupported_file}" '
 # Parses URIs into sing-box compatible JSON objects
-# Supports: vmess, vless, trojan, hysteria, hysteria2, tuic, socks, http, snell, ss
+# Supported: vmess, vless, trojan, hysteria, hysteria2, hy2, tuic, socks, http, ss
 
 BEGIN {
-    # Base64 Table
     b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    for (i = 0; i < 64; i++) b64_val[substr(b64, i+1, 1)] = i
-    b64_val["-"] = 62; b64_val["_"] = 63
+    for (i = 0; i < 64; i++) b64_val[substr(b64, i + 1, 1)] = i
+    b64_val["-"] = 62
+    b64_val["_"] = 63
 }
 
-function decode_base64(str,    len, i, bits, val, out, c) {
-    len = length(str)
-    bits = 0
-    val = 0
-    out = ""
-    for (i = 1; i <= len; i++) {
-        c = substr(str, i, 1)
-        if (c == "=") break
-        if (c in b64_val) {
-            val = val * 64 + b64_val[c]
-            bits += 6
-            if (bits >= 8) {
-                bits -= 8
-                out = out sprintf("%c", int(val / (2^bits)) % 256)
-            }
-        }
+function clear_map(map,    k) {
+    for (k in map) delete map[k]
+}
+
+function record_unsupported(proto) {
+    if (!(proto in unsupported_seen)) {
+        print proto >> unsupported_file
+        unsupported_seen[proto] = 1
     }
+}
+
+function trim(str) {
+    sub(/^[[:space:]]+/, "", str)
+    sub(/[[:space:]]+$/, "", str)
+    return str
+}
+
+function truthy(str,    s) {
+    s = tolower(str)
+    return (s == "1" || s == "true" || s == "yes" || s == "on")
+}
+
+function decode_base64(str,    normalized, mod, cmd, out, line) {
+    normalized = str
+    gsub(/_/, "/", normalized)
+    gsub(/-/, "+", normalized)
+    mod = length(normalized) % 4
+    if (mod == 2) normalized = normalized "=="
+    else if (mod == 3) normalized = normalized "="
+    else if (mod == 1) return ""
+
+    cmd = "printf %s \047" normalized "\047 | base64 -d 2>/dev/null"
+    out = ""
+    while ((cmd | getline line) > 0) {
+        out = out line
+    }
+    close(cmd)
     return out
 }
 
@@ -201,27 +225,78 @@ function json_escape(str) {
     return str
 }
 
-function get_json_val(json, key,   pat, start, end, val) {
-    pat = "\"" key "\"[[:space:]]*:[[:space:]]*"
-    start = match(json, pat)
-    if (start == 0) return ""
-    
-    rest = substr(json, start + RLENGTH)
-    
-    if (substr(rest, 1, 1) == "\"") {
-        end = index(substr(rest, 2), "\"")
-        if (end == 0) return ""
-        val = substr(rest, 2, end - 1)
-        return val
-    } else {
-        match(rest, /^[^,}\]]+/)
-        val = substr(rest, 1, RLENGTH)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
-        return val
+function json_array_csv(str,    out, first, n, i, item, parts) {
+    out = "["
+    first = 1
+    n = split(str, parts, /,/)
+    for (i = 1; i <= n; i++) {
+        item = trim(parts[i])
+        if (item == "") continue
+        if (!first) out = out ","
+        out = out "\"" json_escape(item) "\""
+        first = 0
+    }
+    out = out "]"
+    return out
+}
+
+function qp_get(name, default) {
+    if (name in qp) return qp[name]
+    return default
+}
+
+function qp_pick(a, b, c, d, default,    v) {
+    v = qp_get(a, "")
+    if (v != "") return v
+    v = qp_get(b, "")
+    if (v != "") return v
+    v = qp_get(c, "")
+    if (v != "") return v
+    v = qp_get(d, "")
+    if (v != "") return v
+    return default
+}
+
+function split_tag_query(raw,    frag_idx, q_idx) {
+    clear_map(qp)
+    tag = ""
+    query = ""
+    base = raw
+
+    frag_idx = index(base, "#")
+    if (frag_idx > 0) {
+        tag = url_decode(substr(base, frag_idx + 1))
+        base = substr(base, 1, frag_idx - 1)
+    }
+
+    q_idx = index(base, "?")
+    if (q_idx > 0) {
+        query = substr(base, q_idx + 1)
+        base = substr(base, 1, q_idx - 1)
+    }
+
+    parse_query(query)
+}
+
+function parse_query(query_str,    n, i, pair, eq_idx, key, val) {
+    if (query_str == "") return
+    n = split(query_str, q_parts, /&/)
+    for (i = 1; i <= n; i++) {
+        pair = q_parts[i]
+        if (pair == "") continue
+        eq_idx = index(pair, "=")
+        if (eq_idx > 0) {
+            key = url_decode(substr(pair, 1, eq_idx - 1))
+            val = url_decode(substr(pair, eq_idx + 1))
+        } else {
+            key = url_decode(pair)
+            val = ""
+        }
+        if (key != "") qp[key] = val
     }
 }
 
-function url_decode(str,   res, i, c, hex, h) {
+function url_decode(str,    res, i, c, hex, h) {
     res = ""
     for (i = 1; i <= length(str); i++) {
         c = substr(str, i, 1)
@@ -244,160 +319,426 @@ function url_decode(str,   res, i, c, hex, h) {
     return res
 }
 
+function parse_endpoint(endpoint, default_port,    n, cb, p, parts) {
+    server = ""
+    server_port = default_port
+
+    if (endpoint == "") return
+
+    if (substr(endpoint, 1, 1) == "[") {
+        cb = index(endpoint, "]")
+        if (cb > 0) {
+            server = substr(endpoint, 2, cb - 2)
+            p = substr(endpoint, cb + 1)
+            sub(/^:/, "", p)
+            if (p != "") server_port = p + 0
+            return
+        }
+    }
+
+    n = split(endpoint, parts, ":")
+    if (n >= 2) {
+        server_port = parts[n] + 0
+        server = substr(endpoint, 1, length(endpoint) - length(parts[n]) - 1)
+    } else {
+        server = endpoint
+    }
+}
+
+function split_userinfo(base_str,    at_idx) {
+    userinfo = ""
+    endpoint = base_str
+    at_idx = index(base_str, "@")
+    if (at_idx > 0) {
+        userinfo = substr(base_str, 1, at_idx - 1)
+        endpoint = substr(base_str, at_idx + 1)
+    }
+}
+
+function host_fallback() {
+    return qp_pick("host", "Host", "peer", "sni", server)
+}
+
+function build_tls_json(default_sni, force_enable,    tls, server_name, insecure, alpn, fp, pbk, sid) {
+    server_name = qp_pick("sni", "serverName", "servername", "peer", default_sni)
+    insecure = truthy(qp_pick("insecure", "allowInsecure", "", "", ""))
+    alpn = qp_get("alpn", "")
+    fp = qp_pick("fp", "fingerprint", "", "", "")
+    pbk = qp_pick("pbk", "public-key", "public_key", "", "")
+    sid = qp_pick("sid", "short_id", "", "", "")
+
+    if (!force_enable && server_name == "" && !insecure && alpn == "" && fp == "" && pbk == "" && sid == "") return ""
+
+    tls = "\"tls\":{\"enabled\":true"
+    if (server_name != "") tls = tls ",\"server_name\":\"" json_escape(server_name) "\""
+    if (insecure) tls = tls ",\"insecure\":true"
+    if (alpn != "") tls = tls ",\"alpn\":" json_array_csv(alpn)
+    if (fp != "") tls = tls ",\"utls\":{\"enabled\":true,\"fingerprint\":\"" json_escape(fp) "\"}"
+    if (pbk != "" || sid != "") {
+        tls = tls ",\"reality\":{\"enabled\":true"
+        if (pbk != "") tls = tls ",\"public_key\":\"" json_escape(pbk) "\""
+        if (sid != "") tls = tls ",\"short_id\":\"" json_escape(sid) "\""
+        tls = tls "}"
+    }
+    tls = tls "}"
+    return tls
+}
+
+function build_transport_json(default_host,    transport_type, path, host, service_name, mode, header_type, transport) {
+    transport_type = tolower(qp_pick("type", "network", "", "", ""))
+    header_type = tolower(qp_get("headerType", ""))
+    if ((transport_type == "" || transport_type == "tcp") && header_type != "http") return ""
+
+    path = qp_get("path", "")
+    host = qp_pick("host", "Host", "", "", default_host)
+
+    if (transport_type == "ws") {
+        transport = "\"transport\":{\"type\":\"ws\""
+        if (path != "") transport = transport ",\"path\":\"" json_escape(path) "\""
+        if (host != "") transport = transport ",\"headers\":{\"Host\":\"" json_escape(host) "\"}"
+        if (qp_get("ed", "") != "") transport = transport ",\"max_early_data\":" (qp_get("ed", "") + 0)
+        if (qp_get("eh", "") != "") transport = transport ",\"early_data_header_name\":\"" json_escape(qp_get("eh", "")) "\""
+        return transport "}"
+    }
+
+    if (transport_type == "grpc") {
+        service_name = qp_pick("serviceName", "service_name", "", "", "")
+        mode = tolower(qp_get("mode", ""))
+        transport = "\"transport\":{\"type\":\"grpc\""
+        if (service_name != "") transport = transport ",\"service_name\":\"" json_escape(service_name) "\""
+        if (mode == "multi") transport = transport ",\"permit_without_stream\":true"
+        return transport "}"
+    }
+
+    if (transport_type == "http") {
+        transport = "\"transport\":{\"type\":\"http\""
+        if (host != "") transport = transport ",\"host\":" json_array_csv(host)
+        if (path != "") transport = transport ",\"path\":\"" json_escape(path) "\""
+        if (qp_get("method", "") != "") transport = transport ",\"method\":\"" json_escape(qp_get("method", "")) "\""
+        return transport "}"
+    }
+
+    if (transport_type == "httpupgrade" || transport_type == "http-upgrade") {
+        transport = "\"transport\":{\"type\":\"httpupgrade\""
+        if (host != "") transport = transport ",\"host\":\"" json_escape(host) "\""
+        if (path != "") transport = transport ",\"path\":\"" json_escape(path) "\""
+        return transport "}"
+    }
+
+    if (transport_type == "quic") return "\"transport\":{\"type\":\"quic\"}"
+
+    if (transport_type == "tcp" && header_type == "http") {
+        transport = "\"transport\":{\"type\":\"http\""
+        if (host != "") transport = transport ",\"host\":" json_array_csv(host)
+        if (path != "") transport = transport ",\"path\":\"" json_escape(path) "\""
+        return transport "}"
+    }
+
+    record_unsupported("transport/" transport_type)
+    return "__UNSUPPORTED__"
+}
+
+function node_begin(type_name, tag_name) {
+    node = "{\"type\":\"" type_name "\",\"tag\":\"" json_escape(tag_name) "\""
+}
+
+function node_add_str(key, value) {
+    if (value != "") node = node ",\"" key "\":\"" json_escape(value) "\""
+}
+
+function node_add_num(key, value) {
+    if (value != "") node = node ",\"" key "\":" value
+}
+
+function node_add_bool(key, value) {
+    if (value != "") node = node ",\"" key "\":" value
+}
+
+function node_add_json(fragment) {
+    if (fragment != "") node = node "," fragment
+}
+
+function node_emit() {
+    print node "}"
+}
+
+function get_json_val(json, key,    pat, start, end, val, rest) {
+    pat = "\"" key "\"[[:space:]]*:[[:space:]]*"
+    start = match(json, pat)
+    if (start == 0) return ""
+
+    rest = substr(json, start + RLENGTH)
+    if (substr(rest, 1, 1) == "\"") {
+        end = index(substr(rest, 2), "\"")
+        if (end == 0) return ""
+        val = substr(rest, 2, end - 1)
+        return val
+    }
+
+    match(rest, /^[^,}\]]+/)
+    val = substr(rest, 1, RLENGTH)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+    return val
+}
+
 {
     uri = $0
     if (uri == "" || uri ~ /^#/) next
-    
+
     idx = index(uri, "://")
     if (idx == 0) next
-    proto = substr(uri, 1, idx - 1)
+
+    proto = tolower(substr(uri, 1, idx - 1))
     body = substr(uri, idx + 3)
-    
-    tag = ""
-    server = ""
-    port = 0
-    
-    # --- VMESS ---
+    if (proto == "hy2") proto = "hysteria2"
+
     if (proto == "vmess") {
         json_str = decode_base64(body)
-        
-        ps = get_json_val(json_str, "ps")
-        add = get_json_val(json_str, "add")
-        port = get_json_val(json_str, "port") + 0
-        id = get_json_val(json_str, "id")
+        tag = get_json_val(json_str, "ps")
+        server = get_json_val(json_str, "add")
+        server_port = get_json_val(json_str, "port") + 0
+        uuid = get_json_val(json_str, "id")
         aid = get_json_val(json_str, "aid")
-        scy = get_json_val(json_str, "scy")
-        net = get_json_val(json_str, "net")
+        security = get_json_val(json_str, "scy")
+        transport_type = tolower(get_json_val(json_str, "net"))
         host = get_json_val(json_str, "host")
         path = get_json_val(json_str, "path")
-        tls = get_json_val(json_str, "tls")
+        tls_mode = tolower(get_json_val(json_str, "tls"))
         sni = get_json_val(json_str, "sni")
-        
-        if (add == "") next
 
-        printf "{\"type\":\"vmess\",\"tag\":\"%s\",\"server\":\"%s\",\"server_port\":%d,\"uuid\":\"%s\"", \
-            json_escape(ps != "" ? ps : "VMess"), json_escape(add), port, json_escape(id)
-            
-        if (aid != "" && aid != "0") printf ",\"alter_id\":%d", aid
-        if (scy == "auto" || scy == "") printf ",\"security\":\"auto\""
-        else printf ",\"security\":\"%s\"", scy
-        
-        if (net == "ws") {
-            printf ",\"transport\":{\"type\":\"ws\",\"path\":\"%s\",\"headers\":{\"Host\":\"%s\"}}", \
-                json_escape(path), json_escape(host)
+        if (server == "" || uuid == "") next
+
+        node_begin("vmess", tag != "" ? tag : "VMess")
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("uuid", uuid)
+        node_add_str("security", security == "" ? "auto" : security)
+        if (aid != "" && aid != "0") node_add_num("alter_id", aid + 0)
+
+        if (transport_type == "ws") {
+            transport = "\"transport\":{\"type\":\"ws\""
+            if (path != "") transport = transport ",\"path\":\"" json_escape(path) "\""
+            if (host != "") transport = transport ",\"headers\":{\"Host\":\"" json_escape(host) "\"}"
+            transport = transport "}"
+            node_add_json(transport)
+        } else if (transport_type != "" && transport_type != "tcp") {
+            record_unsupported("vmess/" transport_type)
+            next
         }
-        
-        if (tls == "tls") {
-            printf ",\"tls\":{\"enabled\":true,\"server_name\":\"%s\"}", json_escape(sni != "" ? sni : host)
+
+        if (tls_mode == "tls") node_add_json("\"tls\":{\"enabled\":true,\"server_name\":\"" json_escape(sni != "" ? sni : host_fallback()) "\"}")
+        else if (tls_mode != "") {
+            record_unsupported("vmess/tls=" tls_mode)
+            next
         }
-        
-        print "}"
+
+        node_emit()
         next
     }
-    
-    # --- SS ---
+
     if (proto == "ss") {
-        tag_idx = index(body, "#")
-        if (tag_idx > 0) {
-            tag = substr(body, tag_idx + 1)
-            body = substr(body, 1, tag_idx - 1)
-        } else {
-            tag = "shadowsocks"
-        }
-        
-        at_idx = index(body, "@")
-        if (at_idx > 0) {
-            userinfo = substr(body, 1, at_idx - 1)
-            hostport = substr(body, at_idx + 1)
-            if (index(userinfo, ":") == 0) userinfo = decode_base64(userinfo)
-        } else {
-            decoded = decode_base64(body)
-            at_idx = index(decoded, "@")
-            if (at_idx > 0) {
-                userinfo = substr(decoded, 1, at_idx - 1)
-                hostport = substr(decoded, at_idx + 1)
-            } else {
-                next
-            }
-        }
-        
-        split(userinfo, up, ":")
-        method = up[1]
-        password = up[2]
-        
-        colon_idx = index(hostport, ":")
-        host = substr(hostport, 1, colon_idx - 1)
-        port = substr(hostport, colon_idx + 1) + 0
-        
-        printf "{\"type\":\"shadowsocks\",\"tag\":\"%s\",\"server\":\"%s\",\"server_port\":%d,\"method\":\"%s\",\"password\":\"%s\"}\n", \
-            json_escape(tag), json_escape(host), port, json_escape(method), json_escape(password)
-        next
-    }
-    
-    # --- Generic ---
-    tag_idx = index(body, "#")
-    if (tag_idx > 0) {
-        tag = substr(body, tag_idx + 1)
-        body = substr(body, 1, tag_idx - 1)
-        tag = url_decode(tag)
-    } else {
-        tag = proto
-    }
-    
-    at_idx = index(body, "@")
-    if (at_idx > 0) {
-        uuid = substr(body, 1, at_idx - 1)
-        hostport_path = substr(body, at_idx + 1)
-    } else {
-        next
-    }
-    
-    q_idx = index(hostport_path, "?")
-    if (q_idx > 0) {
-        hostport = substr(hostport_path, 1, q_idx - 1)
-    } else {
-        hostport = hostport_path
-    }
-    
-    # Host Port
-    if (index(hostport, "[") == 1) {
-        cb = index(hostport, "]")
-        host = substr(hostport, 2, cb - 2)
-        port_str = substr(hostport, cb + 2)
-        sub(/^:/, "", port_str)
-        port = port_str + 0
-    } else {
-        n = split(hostport, hp, ":")
-        if (n >= 2) {
-            port = hp[n] + 0
-            host = substr(hostport, 1, length(hostport) - length(hp[n]) - 1)
-        } else {
-            host = hostport
-            port = 443
-        }
-    }
-    if (port == 0) port = 443
+        split_tag_query(body)
+        if (tag == "") tag = "shadowsocks"
 
-    printf "{\"type\":\"%s\",\"tag\":\"%s\",\"server\":\"%s\",\"server_port\":%d", proto, json_escape(tag), json_escape(host), port
-    
-    if (proto == "vless" || proto == "tuic") {
-        printf ",\"uuid\":\"%s\"", json_escape(uuid)
-    } else if (proto == "trojan" || proto == "hysteria2") {
-        printf ",\"password\":\"%s\"", json_escape(uuid)
-    } else if (proto == "hysteria") {
-        printf ",\"auth\":\"%s\"", json_escape(uuid)
-    } else if (proto == "socks" || proto == "http") {
-         printf ",\"username\":\"%s\"", json_escape(uuid)
-    } else if (proto == "snell") {
-         printf ",\"psk\":\"%s\"", json_escape(uuid)
+        split_userinfo(base)
+        if (userinfo != "") {
+            if (index(userinfo, ":") == 0) userinfo = decode_base64(userinfo)
+            auth = userinfo
+            endpoint_base = endpoint
+        } else {
+            decoded = decode_base64(base)
+            split_userinfo(decoded)
+            auth = userinfo
+            endpoint_base = endpoint
+        }
+
+        if (auth == "") next
+        colon_idx = index(auth, ":")
+        if (colon_idx == 0) next
+        method = substr(auth, 1, colon_idx - 1)
+        password = substr(auth, colon_idx + 1)
+        parse_endpoint(endpoint_base, 8388)
+        if (server == "") next
+
+        node_begin("shadowsocks", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("method", method)
+        node_add_str("password", password)
+        node_add_str("plugin", qp_get("plugin", ""))
+        node_add_str("plugin_opts", qp_pick("plugin-opts", "plugin_opts", "", "", ""))
+        node_add_str("network", qp_get("network", ""))
+        node_emit()
+        next
     }
-    
-    print "}"
+
+    split_tag_query(body)
+    split_userinfo(base)
+    parse_endpoint(endpoint, 443)
+    if (server == "") next
+
+    if (tag == "") tag = proto
+
+    if (proto == "vless") {
+        if (userinfo == "") next
+        transport = build_transport_json(host_fallback())
+        if (transport == "__UNSUPPORTED__") next
+        security_mode = tolower(qp_pick("security", "tls", "", "", ""))
+
+        node_begin("vless", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("uuid", url_decode(userinfo))
+        node_add_str("flow", qp_get("flow", ""))
+        node_add_str("network", qp_get("network", ""))
+        node_add_str("packet_encoding", qp_pick("packetEncoding", "packet_encoding", "", "", ""))
+        if (security_mode == "tls" || security_mode == "reality") node_add_json(build_tls_json(host_fallback(), 1))
+        else if (security_mode != "" && security_mode != "none") {
+            record_unsupported("vless/security=" security_mode)
+            next
+        }
+        node_add_json(transport)
+        node_emit()
+        next
+    }
+
+    if (proto == "trojan") {
+        transport = build_transport_json(host_fallback())
+        if (transport == "__UNSUPPORTED__") next
+
+        node_begin("trojan", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("password", url_decode(userinfo))
+        node_add_str("network", qp_get("network", ""))
+        node_add_json(build_tls_json(host_fallback(), 1))
+        node_add_json(transport)
+        node_emit()
+        next
+    }
+
+    if (proto == "hysteria") {
+        node_begin("hysteria", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        if (qp_get("mport", "") != "") node_add_json("\"server_ports\":" json_array_csv(qp_get("mport", "")))
+        node_add_str("hop_interval", qp_get("hopInterval", ""))
+        node_add_str("up", qp_get("up", ""))
+        node_add_str("down", qp_get("down", ""))
+        node_add_num("up_mbps", qp_pick("upmbps", "up_mbps", "", "", ""))
+        node_add_num("down_mbps", qp_pick("downmbps", "down_mbps", "", "", ""))
+        node_add_str("obfs", qp_get("obfs", ""))
+        node_add_str("auth", qp_get("auth", ""))
+        node_add_str("auth_str", userinfo != "" ? url_decode(userinfo) : qp_pick("auth_str", "password", "", "", ""))
+        node_add_str("network", qp_get("network", ""))
+        node_add_json(build_tls_json(host_fallback(), 1))
+        node_emit()
+        next
+    }
+
+    if (proto == "hysteria2") {
+        node_begin("hysteria2", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        if (qp_get("mport", "") != "") node_add_json("\"server_ports\":" json_array_csv(qp_get("mport", "")))
+        node_add_str("hop_interval", qp_pick("hopInterval", "hop_interval", "", "", ""))
+        node_add_str("hop_interval_max", qp_pick("hopIntervalMax", "hop_interval_max", "", "", ""))
+        node_add_num("up_mbps", qp_pick("upmbps", "up_mbps", "", "", ""))
+        node_add_num("down_mbps", qp_pick("downmbps", "down_mbps", "", "", ""))
+        obfs_type = qp_get("obfs", "")
+        obfs_password = qp_pick("obfs-password", "obfs_password", "", "", "")
+        if (obfs_password == "" && obfs_type != "" && obfs_type != "salamander" && obfs_type != "gecko") {
+            obfs_password = obfs_type
+            obfs_type = "salamander"
+        }
+        if (obfs_type != "" && obfs_password != "") node_add_json("\"obfs\":{\"type\":\"" json_escape(obfs_type) "\",\"password\":\"" json_escape(obfs_password) "\"}")
+        node_add_str("password", userinfo != "" ? url_decode(userinfo) : qp_pick("password", "", "", "", ""))
+        node_add_str("network", qp_get("network", ""))
+        node_add_json(build_tls_json(host_fallback(), 1))
+        node_emit()
+        next
+    }
+
+    if (proto == "tuic") {
+        colon_idx = index(userinfo, ":")
+        if (colon_idx == 0) next
+        tuic_uuid = url_decode(substr(userinfo, 1, colon_idx - 1))
+        tuic_password = url_decode(substr(userinfo, colon_idx + 1))
+
+        node_begin("tuic", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("uuid", tuic_uuid)
+        node_add_str("password", tuic_password)
+        node_add_str("congestion_control", qp_get("congestion_control", ""))
+        node_add_str("udp_relay_mode", qp_get("udp_relay_mode", ""))
+        if (truthy(qp_get("udp_over_stream", ""))) node_add_bool("udp_over_stream", "true")
+        if (truthy(qp_pick("zero_rtt", "zero_rtt_handshake", "", "", ""))) node_add_bool("zero_rtt_handshake", "true")
+        node_add_str("heartbeat", qp_get("heartbeat", ""))
+        node_add_str("network", qp_get("network", ""))
+        node_add_json(build_tls_json(host_fallback(), 1))
+        node_emit()
+        next
+    }
+
+    if (proto == "socks") {
+        colon_idx = index(userinfo, ":")
+        socks_user = ""
+        socks_pass = ""
+        if (colon_idx > 0) {
+            socks_user = url_decode(substr(userinfo, 1, colon_idx - 1))
+            socks_pass = url_decode(substr(userinfo, colon_idx + 1))
+        } else if (userinfo != "") {
+            socks_user = url_decode(userinfo)
+        }
+
+        node_begin("socks", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("version", qp_get("version", "5"))
+        node_add_str("username", socks_user)
+        node_add_str("password", socks_pass)
+        node_add_str("network", qp_get("network", ""))
+        node_emit()
+        next
+    }
+
+    if (proto == "http" || proto == "https") {
+        colon_idx = index(userinfo, ":")
+        http_user = ""
+        http_pass = ""
+        if (colon_idx > 0) {
+            http_user = url_decode(substr(userinfo, 1, colon_idx - 1))
+            http_pass = url_decode(substr(userinfo, colon_idx + 1))
+        } else if (userinfo != "") {
+            http_user = url_decode(userinfo)
+        }
+
+        node_begin("http", tag)
+        node_add_str("server", server)
+        node_add_num("server_port", server_port)
+        node_add_str("username", http_user)
+        node_add_str("password", http_pass)
+        node_add_str("path", qp_get("path", ""))
+        if (qp_get("host", "") != "") node_add_json("\"headers\":{\"Host\":\"" json_escape(qp_get("host", "")) "\"}")
+        if (proto == "https" || truthy(qp_get("tls", "")) || tolower(qp_get("security", "")) == "tls") node_add_json(build_tls_json(host_fallback(), 1))
+        node_emit()
+        next
+    }
+
+    record_unsupported(proto)
 }
 ' "${input}" | run_pipeline || {
             log_error "Pipeline execution failed"
             return 1
         }
+
+        if [ -s "${unsupported_file}" ]; then
+            while IFS= read -r proto; do
+                [ -n "${proto}" ] || continue
+                log_warn "Skipped unsupported URI protocol: ${proto}"
+            done <"${unsupported_file}"
+        fi
     fi
     return 0
 }
@@ -474,6 +815,10 @@ do_update() {
     # Check dependencies
     [ -f "${JQ_BIN}" ] || {
         log_error "JQ missing"
+        return 1
+    }
+    command -v base64 >/dev/null 2>&1 || {
+        log_error "base64 command missing"
         return 1
     }
     [ -f "${TEMPLATE_FILE}" ] || {
