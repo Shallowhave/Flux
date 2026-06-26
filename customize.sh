@@ -50,6 +50,29 @@ fi
 ui_error() { ui_print "! $1"; }
 ui_success() { ui_print "[OK] $1"; }
 
+_mktemp_parent() {
+    local dir
+    for dir in "${TMPDIR:-}" "/data/local/tmp" "${MODPATH}/tmp" "${FLUX_DIR}/tmp"; do
+        [ -n "${dir}" ] || continue
+        mkdir -p "${dir}" 2>/dev/null || continue
+        printf '%s\n' "${dir}"
+        return 0
+    done
+    return 1
+}
+
+_mktemp_file() {
+    local parent="${1}"
+    local template="${parent}/flux-inst.XXXXXX"
+    mktemp "${template}" 2>/dev/null
+}
+
+_mktemp_dir() {
+    local parent="${1}"
+    local template="${parent}/flux-inst.XXXXXX"
+    mktemp -d "${template}" 2>/dev/null
+}
+
 _detect_env() {
     ui_print "- Detecting environment..."
 
@@ -166,12 +189,14 @@ _migrate_settings() {
     local backup_file="${1}"
     local target_file="${2}"
     local tmp_file
+    local tmp_parent
 
     [ ! -f "${backup_file}" ] && return 0
 
     ui_print "  > Migrating settings (incremental)..."
 
-    tmp_file=$(mktemp) || return 1
+    tmp_parent=$(_mktemp_parent) || return 1
+    tmp_file=$(_mktemp_file "${tmp_parent}") || return 1
     awk -v keys="${MIGRATE_KEYS}" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)
@@ -296,7 +321,9 @@ main() {
 
     # 1. Backup config files before overwriting
     local tmp_backup
-    tmp_backup=$(mktemp -d 2>/dev/null) || abort "! Failed to create temporary backup directory"
+    local tmp_parent
+    tmp_parent=$(_mktemp_parent) || abort "! Failed to resolve temporary directory"
+    tmp_backup=$(_mktemp_dir "${tmp_parent}") || abort "! Failed to create temporary backup directory"
     mkdir -p "${tmp_backup}"
 
     # Ensure cleanup on exit (Use double quotes to expand tmp_backup immediately)
